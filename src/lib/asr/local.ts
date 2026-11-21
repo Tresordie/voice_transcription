@@ -6,6 +6,7 @@
 //  - emscripten glue 为非模块化构建：先挂全局 Module（locateFile 指向 .data 的
 //    blob URL），再注入 <script> 加载 glue，onRuntimeInitialized 后创建识别器
 import { useSyncExternalStore } from 'react'
+import { fixLocalCase } from './case'
 import { ZIPFORMER_ZH_EN } from '../models/catalog'
 import { cachedBlobUrl, cachedSize, deleteCached, isCached, type DownloadProgress } from '../models/downloader'
 
@@ -217,7 +218,7 @@ export class LocalStreamSession {
     for (let i = 0; i < pcm16.length; i++) f32[i] = pcm16[i] / 32768
     this.stream.acceptWaveform(16000, f32)
     while (this.recognizer.isReady(this.stream)) this.recognizer.decode(this.stream)
-    const partial = this.recognizer.getResult(this.stream).text
+    const partial = fixLocalCase(this.recognizer.getResult(this.stream).text)
     if (partial) this.onPartial?.(partial)
     if (this.recognizer.isEndpoint(this.stream)) {
       if (partial) this.onFinal?.(partial)
@@ -227,7 +228,7 @@ export class LocalStreamSession {
 
   // 结束输入，返回未定稿的尾部文本
   finish(): string {
-    const text = (this.recognizer.getResult(this.stream).text || '').trim()
+    const text = fixLocalCase((this.recognizer.getResult(this.stream).text || '').trim())
     this.stream.inputFinished()
     return text
   }

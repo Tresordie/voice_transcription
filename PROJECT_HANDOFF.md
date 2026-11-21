@@ -85,6 +85,7 @@ proxy.mjs                          # 可选 CORS 透明代理（npm run proxy，
 4. **本地 SenseVoice 延后**：官方无浏览器构建，需自建 wasm/web 运行时（emsdk 编译）。文件高精度场景目前走在线免费 SenseVoiceSmall。
 5. **模型加载瞬时内存高**：blob + XHR 缓冲 + WASM 堆约 3 份副本（~600MB 峰值），低端设备注意。
 6. **在线实时分段边界**可能切断词语（4s 固定窗口，无重叠）。
+7. **本地模型英文输出为全大写**：streaming zipformer 的英文 BPE 词表本身全大写。已在 `src/lib/asr/case.ts` 做输出规整（检测到 >80% 单词全大写时转句子式大小写；正常文本/中文不受影响）。规整无法恢复标点与撇号（"IVE"→"ive" 而非 "I've"），需要标点的英文场景建议用在线引擎。
 
 ## 7. 常见维护操作
 
