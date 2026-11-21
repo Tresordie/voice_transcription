@@ -32,7 +32,7 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     models: ['qwen3-asr-flash'],
     keyUrl: 'https://bailian.console.aliyun.com/?apiKey=1#/api-key',
-    note: '国内第一梯队准确率，支持 26 语种；浏览器直连被 CORS 拦截时需先运行 npm run proxy，Base URL 改为 http://localhost:8787/proxy/<百炼地址>（Token 计划用户填自己的专属 maas 域名）',
+    note: '国内第一梯队准确率。百炼域名未开放 CORS：开发模式把 Base URL 改为 http://localhost:5173/proxy/<百炼地址>（内置代理）；Token 计划用户填自己的专属 maas 域名',
     transport: 'qwen-chat',
   },
   custom: {
@@ -41,7 +41,7 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
     baseURL: '',
     models: [],
     keyUrl: '',
-    note: '任意兼容 OpenAI /audio/transcriptions 格式的服务（火山引擎等可通过代理或适配接入）',
+    note: '任意兼容 OpenAI /audio/transcriptions 格式的服务；若目标是阿里百炼 Qwen-ASR，请先点「阿里百炼」预设再改 Base URL（两者协议不同）',
   },
 }
 
@@ -177,8 +177,9 @@ async function transcribeQwenChat(
 
 function networkError(): OnlineError {
   return new OnlineError(
-    '网络请求失败：该服务商未开放浏览器 CORS 权限。请先运行 `npm run proxy` 启动本地代理，' +
-      '再把 Base URL 改为 http://localhost:8787/proxy/<服务商BaseURL>',
+    '网络请求失败：该服务商未开放浏览器 CORS 权限。开发模式下把 Base URL 改为 ' +
+      'http://localhost:5173/proxy/<服务商BaseURL>（内置代理）；独立部署时运行 npm run proxy，' +
+      '改用 http://localhost:8787/proxy/<服务商BaseURL>',
   )
 }
 
