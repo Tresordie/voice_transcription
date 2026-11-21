@@ -22,7 +22,7 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
     id: 'siliconflow',
     label: '硅基流动',
     baseURL: 'https://api.siliconflow.cn/v1',
-    models: ['FunAudioLLM/SenseVoiceSmall', 'TeleAI/TeleSpeechASR'],
+    models: ['FunAudioLLM/SenseVoiceSmall'],
     keyUrl: 'https://cloud.siliconflow.cn/account/ak',
     note: 'SenseVoiceSmall 完全免费、中文效果好、国内直连',
   },
