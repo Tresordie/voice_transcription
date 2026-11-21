@@ -29,10 +29,10 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
   dashscope: {
     id: 'dashscope',
     label: '阿里百炼 Qwen-ASR',
-    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    models: ['qwen3-asr-flash'],
+    baseURL: 'http://localhost:5173/proxy/https://dashscope.aliyuncs.com/compatible-mode/v1',
+    models: ['qwen3-asr-flash', 'qwen-audio-3.0-asr-flash'],
     keyUrl: 'https://bailian.console.aliyun.com/?apiKey=1#/api-key',
-    note: '国内第一梯队准确率。百炼域名未开放 CORS：开发模式把 Base URL 改为 http://localhost:5173/proxy/<百炼地址>（内置代理）；Token 计划用户填自己的专属 maas 域名',
+    note: '国内第一梯队准确率。已预填内置代理地址（dev 服务器同源转发）；Token 计划用户把地址中的 dashscope.aliyuncs.com 换成自己的专属 maas 域名即可，协议会按域名自动识别',
     transport: 'qwen-chat',
   },
   custom: {
@@ -67,17 +67,36 @@ function endpoint(cfg: OnlineConfig): string {
   return `${cfg.baseURL.replace(/\/+$/, '')}/audio/transcriptions`
 }
 
-// 单段转写：按 transport 分发到对应协议
+// 单段转写：按 transport 分发到对应协议。
+// 阿里百炼域名（dashscope/maas.aliyuncs.com）强制走 qwen-chat 协议——
+// 协议跟 URL 自动匹配，用户无论选哪个预设都不会配错。
 export async function transcribeBlob(
   blob: Blob,
   filename: string,
   cfg: OnlineConfig,
   signal?: AbortSignal,
 ): Promise<string> {
-  if (cfg.transport === 'qwen-chat') {
+  const transport: Transport = /aliyuncs\.com/i.test(cfg.baseURL) &&
+    /(dashscope|maas)\.aliyuncs\.com/i.test(cfg.baseURL)
+    ? 'qwen-chat'
+    : (cfg.transport ?? 'transcriptions')
+  if (transport === 'qwen-chat') {
     return transcribeQwenChat(blob, cfg, signal)
   }
   return transcribeTranscriptions(blob, filename, cfg, signal)
+}
+
+/** URL 是否为阿里百炼域名且未走代理（用于设置页的提醒） */
+export function needsProxyHint(baseURL: string): boolean {
+  return (
+    /(dashscope|maas)\.aliyuncs\.com/i.test(baseURL) &&
+    !/\/proxy\//.test(baseURL)
+  )
+}
+
+/** 把裸百炼地址包装为内置代理地址 */
+export function withDevProxy(baseURL: string): string {
+  return `http://localhost:5173/proxy/${baseURL}`
 }
 
 // OpenAI 标准 /audio/transcriptions（multipart 文件上传）

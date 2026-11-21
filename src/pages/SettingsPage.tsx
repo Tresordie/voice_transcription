@@ -15,7 +15,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { PROVIDERS, testOnline, type ProviderId } from '../lib/asr/online'
+import { PROVIDERS, needsProxyHint, testOnline, withDevProxy, type ProviderId } from '../lib/asr/online'
 import {
   cancelLocalDownload,
   ensureLocalEngine,
@@ -187,9 +187,21 @@ export default function SettingsPage() {
             <input
               className="input font-mono text-xs"
               value={settings.baseURL}
-              onChange={(e) => update({ baseURL: e.target.value, provider: 'custom' })}
+              onChange={(e) => update({ baseURL: e.target.value })}
               placeholder="https://api.example.com/v1"
             />
+            {needsProxyHint(settings.baseURL) && (
+              <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
+                <span>⚠️ 阿里云域名未走代理，浏览器直连会被拦截</span>
+                <button
+                  type="button"
+                  className="rounded-lg bg-amber-100 px-2 py-0.5 font-medium text-amber-700 transition-colors hover:bg-amber-200 dark:bg-amber-900/50 dark:text-amber-300 dark:hover:bg-amber-900"
+                  onClick={() => update({ baseURL: withDevProxy(settings.baseURL) })}
+                >
+                  改用内置代理
+                </button>
+              </p>
+            )}
           </div>
           <div>
             <label className="label">API Key</label>
@@ -227,7 +239,7 @@ export default function SettingsPage() {
             <input
               className="input font-mono text-xs"
               value={settings.model}
-              onChange={(e) => update({ model: e.target.value, provider: 'custom' })}
+              onChange={(e) => update({ model: e.target.value })}
               placeholder="whisper-1"
             />
             {preset.models.length > 0 && (
