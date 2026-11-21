@@ -129,7 +129,16 @@ async function transcribeQwenChat(
     messages: [
       {
         role: 'user',
-        content: [{ type: 'input_audio', input_audio: { data: dataUrl } }],
+        content: [
+          {
+            type: 'input_audio',
+            // OpenAI Chat 音频格式镜像：data 为 Data URI，format 声明编码
+            input_audio: {
+              data: dataUrl,
+              format: blob.type.includes('mp3') ? 'mp3' : 'wav',
+            },
+          },
+        ],
       },
     ],
   }
@@ -156,8 +165,12 @@ async function transcribeQwenChat(
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '')
+    const emptyHint =
+      res.status === 400 && (!text.trim() || text.trim() === '{}')
+        ? '（空响应体：请确认模型名已在当前工作区开通，或 Base URL 域名是否正确）'
+        : ''
     throw new OnlineError(
-      `接口返回 ${res.status}${res.status === 401 ? '（鉴权失败，请检查 API Key）' : ''}：${text.slice(0, 300) || res.statusText}`,
+      `接口返回 ${res.status}${res.status === 401 ? '（鉴权失败，请检查 API Key）' : ''}：${text.slice(0, 300) || res.statusText}${emptyHint}`,
       res.status,
     )
   }
@@ -238,12 +251,17 @@ export async function transcribeFile(
   return joinParts(parts)
 }
 
-// 连接测试：发送 0.5s 静音音频
+// 连接测试：发送 0.5s 440Hz 正弦波（部分云端 ASR 拒绝纯静音音频）
 export async function testOnline(cfg: OnlineConfig): Promise<{ ok: boolean; message: string }> {
   if (!cfg.baseURL || !cfg.apiKey || !cfg.model) {
     return { ok: false, message: '请先完整填写 Base URL、API Key 和模型名' }
   }
-  const wav = encodeWav(new Int16Array(8000), 16000) // 0.5s @16kHz
+  const sr = 16000
+  const pcm = new Int16Array(sr / 2)
+  for (let i = 0; i < pcm.length; i++) {
+    pcm[i] = Math.round(Math.sin((2 * Math.PI * 440 * i) / sr) * 12000)
+  }
+  const wav = encodeWav(pcm, sr)
   try {
     await transcribeBlob(wav, 'test.wav', cfg)
     return { ok: true, message: '连接成功：接口可达、鉴权通过' }
