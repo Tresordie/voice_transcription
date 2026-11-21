@@ -81,7 +81,7 @@ export async function transcribeBlob(
     ? 'qwen-chat'
     : (cfg.transport ?? 'transcriptions')
   if (transport === 'qwen-chat') {
-    return transcribeQwenChat(blob, cfg, signal)
+    return transcribeQwenChat(blob, filename, cfg, signal)
   }
   return transcribeTranscriptions(blob, filename, cfg, signal)
 }
@@ -135,76 +135,111 @@ async function transcribeTranscriptions(
   return (data.text ?? '') as string
 }
 
-// 阿里百炼 Qwen-ASR：chat/completions + input_audio（Base64 Data URI）
-// 文档：https://www.alibabacloud.com/help/zh/model-studio/qwen-asr-api-reference
+// 阿里百炼 Qwen-ASR：chat/completions + input_audio。
+// 不同代际模型（qwen3-asr-flash / qwen-audio-3.0-asr-flash …）对字段格式要求略有差异，
+// 因此自动依次尝试多种形态，成功即用；全失败时聚合各形态的返回便于定位。
+const QWEN_INPUT_VARIANTS = [
+  // 1. OpenAI 镜像格式：Data URI + format
+  (dataUrl: string, _raw: string, fmt: string) => ({ data: dataUrl, format: fmt }),
+  // 2. Data URI（无 format）
+  (dataUrl: string) => ({ data: dataUrl }),
+  // 3. 裸 Base64 + format
+  (_dataUrl: string, raw: string, fmt: string) => ({ data: raw, format: fmt }),
+  // 4. 裸 Base64
+  (_dataUrl: string, raw: string) => ({ data: raw }),
+]
+
 async function transcribeQwenChat(
   blob: Blob,
+  filename: string,
   cfg: OnlineConfig,
   signal?: AbortSignal,
 ): Promise<string> {
   const dataUrl = await blobToDataUrl(blob)
-  const body: Record<string, unknown> = {
-    model: cfg.model,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'input_audio',
-            // OpenAI Chat 音频格式镜像：data 为 Data URI，format 声明编码
-            input_audio: {
-              data: dataUrl,
-              format: blob.type.includes('mp3') ? 'mp3' : 'wav',
-            },
-          },
-        ],
-      },
-    ],
-  }
-  // 中英混说时不要指定 language；用户明确选了语种才传（非标准字段）
-  if (cfg.language && cfg.language !== 'auto') {
-    body.asr_options = { language: cfg.language }
+  const rawB64 = dataUrl.slice(Math.max(0, dataUrl.indexOf(',') + 1))
+  const fmt = blob.type.includes('mp3') ? 'mp3' : 'wav'
+  const url = `${cfg.baseURL.replace(/\/+$/, '')}/chat/completions`
+  const attempts: string[] = []
+  let requestId = ''
+
+  const buildBody = (inputAudio: unknown) => {
+    const body: Record<string, unknown> = {
+      model: cfg.model,
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'input_audio', input_audio: inputAudio }],
+        },
+      ],
+    }
+    // 中英混说时不要指定 language；用户明确选了语种才传（非标准字段）
+    if (cfg.language && cfg.language !== 'auto') body.asr_options = { language: cfg.language }
+    return body
   }
 
-  const url = `${cfg.baseURL.replace(/\/+$/, '')}/chat/completions`
-  let res: Response
+  // 形态 1-4：chat/completions 的 input_audio 字段变体
+  for (let v = 0; v < QWEN_INPUT_VARIANTS.length; v++) {
+    let res: Response
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${cfg.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(buildBody(QWEN_INPUT_VARIANTS[v](dataUrl, rawB64, fmt))),
+        signal,
+      })
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') throw e
+      throw networkError()
+    }
+    requestId = res.headers.get('x-request-id') ?? requestId
+    const text = await res.text().catch(() => '')
+    if (res.ok) return parseQwenChatResponse(text)
+    attempts.push(`形态${v + 1}: HTTP ${res.status} ${text.slice(0, 100)}`)
+    // 401/403/404/5xx 等换形态无意义，只有 400（参数体校验）值得继续尝试
+    if (res.status !== 400) break
+  }
+
+  // 形态 5：该端点也可能支持标准 /audio/transcriptions（multipart）
   try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${cfg.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-      signal,
-    })
+    return await transcribeTranscriptions(blob, filename, cfg, signal)
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw e
-    throw networkError()
+    const m = (e as Error).message.match(/HTTP (\d+)/)
+    attempts.push(`形态5(transcriptions): ${m?.[1] ?? ''} ${(e as Error).message.slice(0, 100)}`)
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    const emptyHint =
-      res.status === 400 && (!text.trim() || text.trim() === '{}')
-        ? '（空响应体：请确认模型名已在当前工作区开通，或 Base URL 域名是否正确）'
-        : ''
-    throw new OnlineError(
-      `接口返回 ${res.status}${res.status === 401 ? '（鉴权失败，请检查 API Key）' : ''}：${text.slice(0, 300) || res.statusText}${emptyHint}`,
-      res.status,
-    )
+
+  const reqId = requestId ? `（request-id: ${requestId}）` : ''
+  throw new OnlineError(
+    `百炼接口对全部 ${attempts.length} 种请求形态均返回错误：${attempts.join('；')}${reqId}。` +
+      '请到百炼控制台该模型页面复制「调用示例」核对协议，或确认模型已在当前工作区开通',
+  )
+}
+
+function parseQwenChatResponse(text: string): string {
+  let data: {
+    choices?: Array<{ message?: { content?: unknown } }>
+    text?: unknown
+    output?: { text?: unknown }
   }
-  const data = await res.json()
+  try {
+    data = JSON.parse(text)
+  } catch {
+    return text.trim()
+  }
   // 兼容多种返回形态：choices[].message.content（字符串或分片数组）、data.text
   const msg = data?.choices?.[0]?.message
-  let text = ''
+  let out = ''
   if (typeof msg?.content === 'string') {
-    text = msg.content
+    out = msg.content
   } else if (Array.isArray(msg?.content)) {
-    text = msg.content.map((p: { text?: string }) => p?.text ?? '').join('')
+    out = (msg.content as Array<{ text?: string }>).map((p) => p?.text ?? '').join('')
   } else {
-    text = data?.text ?? data?.output?.text ?? ''
+    out = String(data?.text ?? data?.output?.text ?? '')
   }
-  return String(text).trim()
+  return out.trim()
 }
 
 function networkError(): OnlineError {
