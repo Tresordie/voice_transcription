@@ -211,6 +211,49 @@ async function transcribeQwenChat(
     attempts.push(`形态5(transcriptions): ${m?.[1] ?? ''} ${(e as Error).message.slice(0, 100)}`)
   }
 
+  // 形态 6：DashScope 原生 multimodal-generation 协议
+  // （Qwen-Audio 旧代际模型不支持 OpenAI 兼容协议，仅支持此协议，路径与 compatible-mode 同域不同路径）
+  if (/compatible-mode/i.test(cfg.baseURL)) {
+    const nativeBase = cfg.baseURL.replace(/\/compatible-mode\/v\d+.*$/, '')
+    const nativeUrl = `${nativeBase}/api/v1/services/aigc/multimodal-generation/generation`
+    const nativeBody: Record<string, unknown> = {
+      model: cfg.model,
+      input: {
+        messages: [
+          { role: 'user', content: [{ audio: dataUrl }] },
+        ],
+      },
+    }
+    if (cfg.language && cfg.language !== 'auto') {
+      nativeBody.parameters = { asr_options: { language: cfg.language } }
+    }
+    let res: Response
+    try {
+      res = await fetch(nativeUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${cfg.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(nativeBody),
+        signal,
+      })
+    } catch (e) {
+      if ((e as Error).name === 'AbortError') throw e
+      throw networkError()
+    }
+    requestId = res.headers.get('x-request-id') ?? requestId
+    const text = await res.text().catch(() => '')
+    if (res.ok) return parseQwenChatResponse(text)
+    attempts.push(`形态6(native): HTTP ${res.status} ${text.slice(0, 100)}`)
+    if (res.status !== 400) {
+      throw new OnlineError(
+        `百炼接口尝试 ${attempts.length} 种请求形态后停止：${attempts.join('；')}${requestId ? `（request-id: ${requestId}）` : ''}。` +
+          '请到百炼控制台该模型页面复制「调用示例」核对协议，或确认模型已在当前工作区开通',
+      )
+    }
+  }
+
   const reqId = requestId ? `（request-id: ${requestId}）` : ''
   throw new OnlineError(
     `百炼接口对全部 ${attempts.length} 种请求形态均返回错误：${attempts.join('；')}${reqId}。` +
@@ -221,25 +264,34 @@ async function transcribeQwenChat(
 function parseQwenChatResponse(text: string): string {
   let data: {
     choices?: Array<{ message?: { content?: unknown } }>
+    output?: {
+      text?: unknown
+      choices?: Array<{ message?: { content?: unknown } }>
+    }
     text?: unknown
-    output?: { text?: unknown }
   }
   try {
     data = JSON.parse(text)
   } catch {
     return text.trim()
   }
-  // 兼容多种返回形态：choices[].message.content（字符串或分片数组）、data.text
+  // OpenAI 兼容形态：choices[].message.content
   const msg = data?.choices?.[0]?.message
-  let out = ''
-  if (typeof msg?.content === 'string') {
-    out = msg.content
-  } else if (Array.isArray(msg?.content)) {
-    out = (msg.content as Array<{ text?: string }>).map((p) => p?.text ?? '').join('')
-  } else {
-    out = String(data?.text ?? data?.output?.text ?? '')
+  if (msg) {
+    if (typeof msg.content === 'string') return msg.content.trim()
+    if (Array.isArray(msg.content)) {
+      return (msg.content as Array<{ text?: string }>).map((p) => p?.text ?? '').join('').trim()
+    }
   }
-  return out.trim()
+  // DashScope 原生形态：output.choices[].message.content 或 output.text
+  const nativeMsg = data?.output?.choices?.[0]?.message
+  if (nativeMsg) {
+    if (typeof nativeMsg.content === 'string') return nativeMsg.content.trim()
+    if (Array.isArray(nativeMsg.content)) {
+      return (nativeMsg.content as Array<{ text?: string }>).map((p) => p?.text ?? '').join('').trim()
+    }
+  }
+  return String(data?.output?.text ?? data?.text ?? '').trim()
 }
 
 function networkError(): OnlineError {
