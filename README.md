@@ -46,11 +46,10 @@ npm run dev
 | 服务商 | 默认模型 | 费用 | 说明 |
 |---|---|---|---|
 | 硅基流动 | FunAudioLLM/SenseVoiceSmall | **免费** | 国内直连，无需代理 |
-| 阿里百炼 Qwen-ASR | qwen3-asr-flash | 按音频秒计费 | 准确率国内第一梯队；需先 `npm run proxy` 再把 Base URL 改为代理地址 |
 | 自定义 | 任意 OpenAI 兼容 /audio/transcriptions 服务 | 按服务商定价 | |
 
-> - OpenAI / Groq 等海外服务已从默认预设中移除，仍可通过「自定义」手动接入（Base URL + Key + 模型名）
-> - 阿里百炼走 `chat/completions + input_audio` 协议（适配器内置）；其域名未开放浏览器 CORS，**必须经本地代理**：运行 `npm run proxy`，Base URL 填 `http://localhost:8787/proxy/<你的百炼地址>`（Token 计划用户填专属 maas 域名），模型名按你控制台显示的填写（如 qwen-audio-3.0-asr-flash）
+> - OpenAI / Groq / 阿里百炼均已从默认预设移除，仍可通过「自定义」接入（Base URL + Key + 模型名）
+> - 阿里百炼走 `chat/completions + input_audio` 独立协议（百炼域名自动识别）；其域名未开放浏览器 CORS，必须经代理：开发模式 Base URL 填 `http://localhost:5173/proxy/<百炼地址>`，独立部署用 `npm run proxy`。注意：Token 计划端点实测对 chat/completions 音频输入返回空体 400（2026-11-21），接入前请先确认模型开通状态与协议
 
 ## 隐私与安全
 

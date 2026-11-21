@@ -1,7 +1,7 @@
 // OpenAI 兼容语音识别客户端（POST /v1/audio/transcriptions）
 import { decodeToPcm16k, encodeWav } from '../audio/wav'
 
-export type ProviderId = 'siliconflow' | 'dashscope' | 'custom'
+export type ProviderId = 'siliconflow' | 'custom'
 
 /** 在线转写的两种协议 */
 export type Transport = 'transcriptions' | 'qwen-chat'
@@ -26,22 +26,13 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
     keyUrl: 'https://cloud.siliconflow.cn/account/ak',
     note: 'SenseVoiceSmall 完全免费、中文效果好、国内直连',
   },
-  dashscope: {
-    id: 'dashscope',
-    label: '阿里百炼 Qwen-ASR',
-    baseURL: 'http://localhost:5173/proxy/https://dashscope.aliyuncs.com/compatible-mode/v1',
-    models: ['qwen3-asr-flash', 'qwen-audio-3.0-asr-flash'],
-    keyUrl: 'https://bailian.console.aliyun.com/?apiKey=1#/api-key',
-    note: '国内第一梯队准确率。已预填内置代理地址（dev 服务器同源转发）；Token 计划用户把地址中的 dashscope.aliyuncs.com 换成自己的专属 maas 域名即可，协议会按域名自动识别',
-    transport: 'qwen-chat',
-  },
   custom: {
     id: 'custom',
     label: '自定义',
     baseURL: '',
     models: [],
     keyUrl: '',
-    note: '任意兼容 OpenAI /audio/transcriptions 格式的服务；若目标是阿里百炼 Qwen-ASR，请先点「阿里百炼」预设再改 Base URL（两者协议不同）',
+    note: '任意兼容 OpenAI /audio/transcriptions 格式的服务；阿里云百炼域名（dashscope/maas.aliyuncs.com）会自动识别为 Qwen-ASR 协议',
   },
 }
 
@@ -68,18 +59,20 @@ function endpoint(cfg: OnlineConfig): string {
 }
 
 // 单段转写：按 transport 分发到对应协议。
-// 阿里百炼域名（dashscope/maas.aliyuncs.com）强制走 qwen-chat 协议——
-// 协议跟 URL 自动匹配，用户无论选哪个预设都不会配错。
+// 协议跟 URL 自动匹配：阿里百炼域名（dashscope/maas.aliyuncs.com）强制 qwen-chat，
+// 硅基流动域名强制标准 transcriptions，其余按设置值——用户无论怎么改都不会配错。
 export async function transcribeBlob(
   blob: Blob,
   filename: string,
   cfg: OnlineConfig,
   signal?: AbortSignal,
 ): Promise<string> {
-  const transport: Transport = /aliyuncs\.com/i.test(cfg.baseURL) &&
-    /(dashscope|maas)\.aliyuncs\.com/i.test(cfg.baseURL)
-    ? 'qwen-chat'
-    : (cfg.transport ?? 'transcriptions')
+  let transport: Transport = cfg.transport ?? 'transcriptions'
+  if (/(dashscope|maas)\.aliyuncs\.com/i.test(cfg.baseURL)) {
+    transport = 'qwen-chat'
+  } else if (/siliconflow\.(cn|com)/i.test(cfg.baseURL)) {
+    transport = 'transcriptions'
+  }
   if (transport === 'qwen-chat') {
     return transcribeQwenChat(blob, filename, cfg, signal)
   }

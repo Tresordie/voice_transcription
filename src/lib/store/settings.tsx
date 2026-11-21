@@ -51,6 +51,7 @@ function load(): AppSettings {
         provider: DEFAULTS.provider,
         baseURL: DEFAULTS.baseURL,
         model: DEFAULTS.model,
+        transport: DEFAULTS.transport,
       }
     }
     return merged

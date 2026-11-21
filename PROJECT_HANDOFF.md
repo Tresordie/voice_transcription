@@ -59,7 +59,9 @@ proxy.mjs                          # 可选 CORS 透明代理（npm run proxy，
 
 ### 4.3 在线模式：OpenAI 兼容协议为主，Qwen-ASR 走独立协议
 主要服务商走 `POST {baseURL}/audio/transcriptions`（multipart）。文件转写统一先解码 → 16kHz → 按 60s 切 WAV 顺序上传拼接：顺带把 m4a/webm 等格式归一化，规避各服务商的格式与 25MB 限制。
-**例外**：阿里百炼 Qwen-ASR（qwen3-asr-flash / qwen-audio-3.0-asr-flash 等）的 OpenAI 兼容模式走 `chat/completions` + `input_audio`（Base64 Data URI），实现于 `online.ts` 的 `transcribeQwenChat`（transport: 'qwen-chat'），复用同一分段机制。百炼域名未开放 CORS，浏览器直连必被拦，须走 `proxy.mjs` 本地代理。
+**例外**：阿里百炼 Qwen-ASR（qwen3-asr-flash / qwen-audio-3.0-asr-flash 等）的 OpenAI 兼容模式走 `chat/completions` + `input_audio`（Base64 Data URI），实现于 `online.ts` 的 `transcribeQwenChat`（transport: 'qwen-chat'），复用同一分段机制。百炼域名未开放 CORS，浏览器直连必被拦，须走 dev 内置代理（vite.config.ts 的 `/proxy/<target>` 中间件）或 `proxy.mjs`。
+
+2026-11-21 更新：**阿里百炼已从默认预设移除**（用户的 Token 计划端点 `token-plan.cn-beijing.maas.aliyuncs.com` 对 chat/completions + input_audio 全部字段形态返回空体 400、对 /audio/transcriptions 返回 404 Api not found，推断该模型未开通或不支持兼容模式协议）。协议按域名自动识别（dashscope/maas.aliyuncs.com → qwen-chat）与代理能力保留在代码中，自定义接入百炼时仍可用。若后续拿到该模型的控制台调用示例，可据此精确适配后再恢复预设。
 
 ### 4.4 实时转录的两种实现
 - 本地：真·流式（`acceptWaveform` + endpoint 检测定句）。
