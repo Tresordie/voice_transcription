@@ -59,6 +59,7 @@ export default function LivePage() {
       apiKey: settings.apiKey,
       model: settings.model,
       language: settings.language,
+      transport: settings.transport,
     }),
     [settings],
   )

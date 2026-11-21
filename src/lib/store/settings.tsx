@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { PROVIDERS, type ProviderId } from '../asr/online'
+import { PROVIDERS, type ProviderId, type Transport } from '../asr/online'
 
 export type EngineMode = 'local' | 'online'
 export type Language = 'auto' | 'zh' | 'en'
@@ -22,6 +22,8 @@ export interface AppSettings {
   baseURL: string
   apiKey: string
   model: string
+  /** 在线请求协议，随服务商预设自动切换 */
+  transport: Transport
 }
 
 const STORAGE_KEY = 'vt:settings'
@@ -34,6 +36,7 @@ const DEFAULTS: AppSettings = {
   baseURL: PROVIDERS.siliconflow.baseURL,
   apiKey: '',
   model: 'FunAudioLLM/SenseVoiceSmall',
+  transport: 'transcriptions',
 }
 
 function load(): AppSettings {
@@ -84,6 +87,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         provider,
         baseURL: p.baseURL || s.baseURL,
         model: p.models[0] ?? s.model,
+        transport: p.transport ?? 'transcriptions',
       }
     })
   }, [])

@@ -1,7 +1,10 @@
 // OpenAI 兼容语音识别客户端（POST /v1/audio/transcriptions）
 import { decodeToPcm16k, encodeWav } from '../audio/wav'
 
-export type ProviderId = 'siliconflow' | 'custom'
+export type ProviderId = 'siliconflow' | 'dashscope' | 'custom'
+
+/** 在线转写的两种协议 */
+export type Transport = 'transcriptions' | 'qwen-chat'
 
 export interface ProviderPreset {
   id: ProviderId
@@ -10,6 +13,8 @@ export interface ProviderPreset {
   models: string[]
   keyUrl: string
   note: string
+  /** 该服务商使用的请求协议，默认 OpenAI /audio/transcriptions */
+  transport?: Transport
 }
 
 export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
@@ -21,13 +26,22 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
     keyUrl: 'https://cloud.siliconflow.cn/account/ak',
     note: 'SenseVoiceSmall 完全免费、中文效果好、国内直连',
   },
+  dashscope: {
+    id: 'dashscope',
+    label: '阿里百炼 Qwen-ASR',
+    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    models: ['qwen3-asr-flash'],
+    keyUrl: 'https://bailian.console.aliyun.com/?apiKey=1#/api-key',
+    note: '国内第一梯队准确率，支持 26 语种；浏览器直连被 CORS 拦截时需先运行 npm run proxy，Base URL 改为 http://localhost:8787/proxy/<百炼地址>（Token 计划用户填自己的专属 maas 域名）',
+    transport: 'qwen-chat',
+  },
   custom: {
     id: 'custom',
     label: '自定义',
     baseURL: '',
     models: [],
     keyUrl: '',
-    note: '任意兼容 OpenAI /audio/transcriptions 格式的服务（阿里百炼、火山引擎等均可通过代理或适配接入）',
+    note: '任意兼容 OpenAI /audio/transcriptions 格式的服务（火山引擎等可通过代理或适配接入）',
   },
 }
 
@@ -36,6 +50,8 @@ export interface OnlineConfig {
   apiKey: string
   model: string
   language?: string
+  /** 请求协议，默认 transcriptions */
+  transport?: Transport
 }
 
 export class OnlineError extends Error {
@@ -51,8 +67,21 @@ function endpoint(cfg: OnlineConfig): string {
   return `${cfg.baseURL.replace(/\/+$/, '')}/audio/transcriptions`
 }
 
-// 单段转写：直接把音频 blob 发给 /audio/transcriptions
+// 单段转写：按 transport 分发到对应协议
 export async function transcribeBlob(
+  blob: Blob,
+  filename: string,
+  cfg: OnlineConfig,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (cfg.transport === 'qwen-chat') {
+    return transcribeQwenChat(blob, cfg, signal)
+  }
+  return transcribeTranscriptions(blob, filename, cfg, signal)
+}
+
+// OpenAI 标准 /audio/transcriptions（multipart 文件上传）
+async function transcribeTranscriptions(
   blob: Blob,
   filename: string,
   cfg: OnlineConfig,
@@ -74,10 +103,7 @@ export async function transcribeBlob(
     })
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw e
-    throw new OnlineError(
-      '网络请求失败：可能是浏览器直连被 CORS 拦截。可换用支持直连的服务商（如硅基流动），' +
-        '或运行 `npm run proxy` 后把 Base URL 改为 http://localhost:8787/proxy/<服务商BaseURL>',
-    )
+    throw networkError()
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '')
@@ -88,6 +114,81 @@ export async function transcribeBlob(
   }
   const data = await res.json()
   return (data.text ?? '') as string
+}
+
+// 阿里百炼 Qwen-ASR：chat/completions + input_audio（Base64 Data URI）
+// 文档：https://www.alibabacloud.com/help/zh/model-studio/qwen-asr-api-reference
+async function transcribeQwenChat(
+  blob: Blob,
+  cfg: OnlineConfig,
+  signal?: AbortSignal,
+): Promise<string> {
+  const dataUrl = await blobToDataUrl(blob)
+  const body: Record<string, unknown> = {
+    model: cfg.model,
+    messages: [
+      {
+        role: 'user',
+        content: [{ type: 'input_audio', input_audio: { data: dataUrl } }],
+      },
+    ],
+  }
+  // 中英混说时不要指定 language；用户明确选了语种才传（非标准字段）
+  if (cfg.language && cfg.language !== 'auto') {
+    body.asr_options = { language: cfg.language }
+  }
+
+  const url = `${cfg.baseURL.replace(/\/+$/, '')}/chat/completions`
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${cfg.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal,
+    })
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') throw e
+    throw networkError()
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new OnlineError(
+      `接口返回 ${res.status}${res.status === 401 ? '（鉴权失败，请检查 API Key）' : ''}：${text.slice(0, 300) || res.statusText}`,
+      res.status,
+    )
+  }
+  const data = await res.json()
+  // 兼容多种返回形态：choices[].message.content（字符串或分片数组）、data.text
+  const msg = data?.choices?.[0]?.message
+  let text = ''
+  if (typeof msg?.content === 'string') {
+    text = msg.content
+  } else if (Array.isArray(msg?.content)) {
+    text = msg.content.map((p: { text?: string }) => p?.text ?? '').join('')
+  } else {
+    text = data?.text ?? data?.output?.text ?? ''
+  }
+  return String(text).trim()
+}
+
+function networkError(): OnlineError {
+  return new OnlineError(
+    '网络请求失败：该服务商未开放浏览器 CORS 权限。请先运行 `npm run proxy` 启动本地代理，' +
+      '再把 Base URL 改为 http://localhost:8787/proxy/<服务商BaseURL>',
+  )
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(r.result as string)
+    r.onerror = () => reject(new Error('音频读取失败'))
+    r.readAsDataURL(blob)
+  })
 }
 
 // 英文片段之间补空格，中文直接拼接

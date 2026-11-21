@@ -77,6 +77,7 @@ export default function FilePage() {
       apiKey: settings.apiKey,
       model: settings.model,
       language: settings.language,
+      transport: settings.transport,
     }),
     [settings],
   )

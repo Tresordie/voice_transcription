@@ -66,6 +66,7 @@ export default function SettingsPage() {
       apiKey: settings.apiKey,
       model: settings.model,
       language: settings.language,
+      transport: settings.transport,
     })
     setTestResult(r)
     setTesting(false)

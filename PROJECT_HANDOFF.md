@@ -57,8 +57,9 @@ proxy.mjs                          # 可选 CORS 透明代理（npm run proxy，
 ### 4.2 wrapper 与 wasm 必须同源配对（ABI 陷阱）
 `sherpa-onnx-asr.js` 封装层按 C 结构体逐字段写内存，字段随版本演进（master 已比 Space 版多出 qwen3Asr/cohereTranscribe 等）。**用了不同版本的 wrapper 会导致结构体错位**。当前三件套来自同一 Space，保持配对；升级时必须整体替换。
 
-### 4.3 在线模式统一 OpenAI 兼容协议
-所有服务商走 `POST {baseURL}/audio/transcriptions`。文件转写统一先解码 → 16kHz → 按 60s 切 WAV 顺序上传拼接：顺带把 m4a/webm 等格式归一化，规避各服务商的格式与 25MB 限制。
+### 4.3 在线模式：OpenAI 兼容协议为主，Qwen-ASR 走独立协议
+主要服务商走 `POST {baseURL}/audio/transcriptions`（multipart）。文件转写统一先解码 → 16kHz → 按 60s 切 WAV 顺序上传拼接：顺带把 m4a/webm 等格式归一化，规避各服务商的格式与 25MB 限制。
+**例外**：阿里百炼 Qwen-ASR（qwen3-asr-flash / qwen-audio-3.0-asr-flash 等）的 OpenAI 兼容模式走 `chat/completions` + `input_audio`（Base64 Data URI），实现于 `online.ts` 的 `transcribeQwenChat`（transport: 'qwen-chat'），复用同一分段机制。百炼域名未开放 CORS，浏览器直连必被拦，须走 `proxy.mjs` 本地代理。
 
 ### 4.4 实时转录的两种实现
 - 本地：真·流式（`acceptWaveform` + endpoint 检测定句）。
