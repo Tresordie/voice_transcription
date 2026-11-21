@@ -49,7 +49,8 @@ npm run dev
 | 自定义 | 任意 OpenAI 兼容 /audio/transcriptions 服务 | 按服务商定价 | |
 
 > - OpenAI / Groq / 阿里百炼均已从默认预设移除，仍可通过「自定义」接入（Base URL + Key + 模型名）
-> - 阿里百炼走 `chat/completions + input_audio` 独立协议（百炼域名自动识别）；其域名未开放浏览器 CORS，必须经代理：开发模式 Base URL 填 `http://localhost:5173/proxy/<百炼地址>`，独立部署用 `npm run proxy`。注意：Token 计划端点实测对 chat/completions 音频输入返回空体 400（2026-11-21），接入前请先确认模型开通状态与协议
+> - 阿里百炼域名（dashscope/maas.aliyuncs.com）自动识别为 Qwen-ASR 协议，并按 6 种请求形态自动探测（`chat/completions + input_audio` 的 4 种字段形态 → multipart `/audio/transcriptions` → DashScope 原生 `multimodal-generation`），成功即用。推荐模型 `qwen3-asr-flash`；注意 `fun-asr-realtime` 等 `-realtime` 后缀模型仅支持 WebSocket 实时协议，无法经 HTTP 接口调用
+> - 百炼域名未开放浏览器 CORS，必须经代理：开发模式点设置页「改用内置代理」（或手动填 `http://localhost:5173/proxy/<百炼地址>`），独立部署用 `npm run proxy`。注意：Token 计划端点实测对 chat/completions 音频输入返回空体 400（2026-11-21），接入前请先确认模型开通状态与协议
 
 ## 隐私与安全
 
@@ -66,6 +67,8 @@ npm run proxy
 # 然后把 Base URL 改为 http://localhost:8787/proxy/<服务商BaseURL>
 # 例如 http://localhost:8787/proxy/https://api.openai.com/v1
 ```
+
+开发模式（`npm run dev`）已内置同款代理：直接把 Base URL 填为 `http://localhost:5173/proxy/<服务商BaseURL>`，或在设置页点「改用内置代理」一键转换。
 
 ## 构建与部署
 
@@ -109,7 +112,7 @@ npm run preview # 本地预览构建产物
 ├── src/
 │   ├── lib/
 │   │   ├── audio/        # 采集、WAV 编解码、重采样、分段器
-│   │   ├── asr/          # 本地引擎（sherpa-onnx）、在线客户端（OpenAI 兼容）
+│   │   ├── asr/          # 本地引擎（sherpa-onnx）、在线客户端（OpenAI 兼容 + 百炼 Qwen-ASR 协议探测）
 │   │   ├── models/       # 模型目录与下载缓存
 │   │   └── store/        # 设置、历史
 │   ├── pages/            # 实时转录 / 文件转写 / 历史 / 设置

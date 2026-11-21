@@ -37,13 +37,14 @@ src/lib/audio/wav.ts               # float/int16 转换、降采样、WAV 编码
 src/lib/audio/capture.ts           # MicRecorder：麦克风采集 + 电平 + MediaRecorder 录制 webm
 src/lib/audio/segmenter.ts         # LiveSegmenter：在线实时模式的 4s 固定分段器
 src/lib/asr/local.ts               # 本地引擎：ensureLocalEngine 单例、LocalStreamSession、transcribePcmLocal、状态订阅 hook
-src/lib/asr/online.ts              # 在线客户端：PROVIDERS 预设、transcribeBlob、transcribeFile（60s 分段）、testOnline
+src/lib/asr/online.ts              # 在线客户端：PROVIDERS 预设、transcribeBlob（含百炼 6 形态协议探测链）、transcribeFile（60s 分段）、testOnline
 src/lib/models/catalog.ts          # 本地模型目录（.data 地址、字节数）
 src/lib/models/downloader.ts       # 下载器：Cache API 缓存、进度回调、多地址回落、取消
 src/lib/store/settings.tsx         # 设置 Context + localStorage（键 vt:settings）
 src/lib/store/history.ts           # IndexedDB（库 vt-db / 表 history）
 src/pages/                         # LivePage / FilePage / SettingsPage / HistoryPage
 proxy.mjs                          # 可选 CORS 透明代理（npm run proxy，端口 8787，路径 /proxy/<目标URL>）
+vite.config.ts                     # dev 服务器内置同款代理（/proxy/<目标URL>），与 proxy.mjs 等价
 ```
 
 ## 4. 关键技术决策（为什么这样做）
@@ -63,6 +64,9 @@ proxy.mjs                          # 可选 CORS 透明代理（npm run proxy，
 
 2026-11-21 更新：**阿里百炼已从默认预设移除**（用户的 Token 计划端点 `token-plan.cn-beijing.maas.aliyuncs.com` 对 chat/completions + input_audio 全部字段形态返回空体 400、对 /audio/transcriptions 返回 404 Api not found，推断该模型未开通或不支持兼容模式协议）。协议按域名自动识别（dashscope/maas.aliyuncs.com → qwen-chat）与代理能力保留在代码中，自定义接入百炼时仍可用。若后续拿到该模型的控制台调用示例，可据此精确适配后再恢复预设。
 
+2026-11-21 补充：qwen-chat 适配器已升级为**协议形态自动探测**——依次尝试 chat/completions + input_audio 的 4 种字段形态（Data URI / 裸 Base64 × 带/不带 format）→ multipart /audio/transcriptions → DashScope 原生 multimodal-generation（compatible-mode 同域不同路径），成功即用；仅 400（参数体校验）才继续换形态，401/404/5xx 直接停止。全失败时聚合各形态的服务端响应与 request-id 辅助定位。vite dev 服务器内置了 `/proxy` 透传中间件（与 proxy.mjs 等价），设置页提供「改用内置代理」一键把裸百炼地址包成 `http://localhost:5173/proxy/<...>`。
+**实测坑**：百炼实时模型（`fun-asr-realtime` 等 `-realtime` 后缀）只支持 WebSocket 流式协议，对全部 6 种 HTTP 形态必然失败——兼容模式 404 Unsupported model、multipart CORS 拦截、原生端点 400 UNSUPPORTED_FORMAT。HTTP 转写请用 Qwen-ASR 家族（推荐 `qwen3-asr-flash`）。非实时 `fun-asr` 走 DashScope 原生异步文件转写（提交任务 + 轮询），本应用同样未实现。
+
 ### 4.4 实时转录的两种实现
 - 本地：真·流式（`acceptWaveform` + endpoint 检测定句）。
 - 在线：4s 固定分段 + 尾段 flush，近实时。**已知取舍**：分段边界可能切断词语。
@@ -79,6 +83,7 @@ proxy.mjs                          # 可选 CORS 透明代理（npm run proxy，
 - 真实麦克风下的本地流式识别准确率与延迟
 - 真实 API Key 的完整转写流程（含长音频分段）
 - Safari / Firefox 兼容性（目前以 Chrome/Edge 为准）
+- 百炼 qwen-chat 探测链的成功路径（`qwen3-asr-flash` + 真实 Key 完整转写）尚未实测；错误聚合路径已在 fun-asr-realtime 误配场景实测（2026-11-21）
 
 ## 6. 已知限制与坑
 
@@ -89,6 +94,7 @@ proxy.mjs                          # 可选 CORS 透明代理（npm run proxy，
 5. **模型加载瞬时内存高**：blob + XHR 缓冲 + WASM 堆约 3 份副本（~600MB 峰值），低端设备注意。
 6. **在线实时分段边界**可能切断词语（4s 固定窗口，无重叠）。
 7. **本地模型英文输出为全大写**：streaming zipformer 的英文 BPE 词表本身全大写。已在 `src/lib/asr/case.ts` 做输出规整（检测到 >80% 单词全大写时转句子式大小写；正常文本/中文不受影响）。规整无法恢复标点与撇号（"IVE"→"ive" 而非 "I've"），需要标点的英文场景建议用在线引擎。
+8. **百炼实时模型不可经 HTTP 调用**：`fun-asr-realtime` 等 `-realtime` 后缀模型仅支持 WebSocket 实时协议，HTTP 探测链全失败（见 §4.3）。自定义接入时模型名用 `qwen3-asr-flash`；UI 侧无模型白名单，只能靠错误信息中的「Unsupported model」与 request-id 定位。
 
 ## 7. 常见维护操作
 
