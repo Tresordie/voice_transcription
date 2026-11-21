@@ -40,7 +40,17 @@ function load(): AppSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return DEFAULTS
-    return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<AppSettings>) }
+    const merged = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<AppSettings>) }
+    // 旧版本可能存有已下线的服务商预设：回退到默认并重置相关字段
+    if (!PROVIDERS[merged.provider]) {
+      return {
+        ...merged,
+        provider: DEFAULTS.provider,
+        baseURL: DEFAULTS.baseURL,
+        model: DEFAULTS.model,
+      }
+    }
+    return merged
   } catch {
     return DEFAULTS
   }

@@ -1,7 +1,7 @@
 // OpenAI 兼容语音识别客户端（POST /v1/audio/transcriptions）
 import { decodeToPcm16k, encodeWav } from '../audio/wav'
 
-export type ProviderId = 'openai' | 'groq' | 'siliconflow' | 'custom'
+export type ProviderId = 'siliconflow' | 'custom'
 
 export interface ProviderPreset {
   id: ProviderId
@@ -13,22 +13,6 @@ export interface ProviderPreset {
 }
 
 export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
-  openai: {
-    id: 'openai',
-    label: 'OpenAI',
-    baseURL: 'https://api.openai.com/v1',
-    models: ['whisper-1', 'gpt-4o-transcribe', 'gpt-4o-mini-transcribe'],
-    keyUrl: 'https://platform.openai.com/api-keys',
-    note: '综合效果极强，中文良好；需海外网络环境',
-  },
-  groq: {
-    id: 'groq',
-    label: 'Groq',
-    baseURL: 'https://api.groq.com/openai/v1',
-    models: ['whisper-large-v3', 'whisper-large-v3-turbo'],
-    keyUrl: 'https://console.groq.com/keys',
-    note: 'whisper-large-v3 速度快、免费额度充足；需海外网络环境',
-  },
   siliconflow: {
     id: 'siliconflow',
     label: '硅基流动',
@@ -43,7 +27,7 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
     baseURL: '',
     models: [],
     keyUrl: '',
-    note: '任意兼容 OpenAI /audio/transcriptions 格式的服务',
+    note: '任意兼容 OpenAI /audio/transcriptions 格式的服务（阿里百炼、火山引擎等均可通过代理或适配接入）',
   },
 }
 

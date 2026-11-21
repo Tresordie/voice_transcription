@@ -46,8 +46,9 @@ npm run dev
 | 服务商 | 默认模型 | 费用 |
 |---|---|---|
 | 硅基流动 | FunAudioLLM/SenseVoiceSmall | **免费** |
-| Groq | whisper-large-v3 | 免费额度充足 |
-| OpenAI | whisper-1 / gpt-4o-transcribe | 按量计费 |
+| 自定义 | 任意 OpenAI 兼容 /audio/transcriptions 服务 | 按服务商定价 |
+
+> OpenAI / Groq 等海外服务已从默认预设中移除，仍可通过「自定义」手动接入（Base URL + Key + 模型名）。
 
 ## 隐私与安全
 
