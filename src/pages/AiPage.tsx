@@ -41,7 +41,7 @@ interface Attachment {
 const EXPORTS: { fmt: ExportFormat; label: string; icon: typeof FileText }[] = [
   { fmt: 'md', label: 'Markdown', icon: FileText },
   { fmt: 'html', label: 'HTML', icon: Code2 },
-  { fmt: 'pdf', label: 'PDF', icon: FileDown },
+  { fmt: 'pdf', label: 'PDF / 打印', icon: FileDown },
   { fmt: 'doc', label: 'Word', icon: FileText },
   { fmt: 'xlsx', label: 'Excel', icon: FileSpreadsheet },
   { fmt: 'pptx', label: 'PPT', icon: Presentation },

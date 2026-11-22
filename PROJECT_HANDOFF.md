@@ -44,7 +44,7 @@ src/lib/ai/templates.ts            # AI 总结预设模板（25 套，脚本生�
 src/lib/ai/llm.ts                  # OpenAI 兼容 chat/completions 客户端（非流式 + SSE 流式解析）
 src/lib/ai/summarize.ts            # 总结编排：>12k 字 map-reduce（分块提取要点→归并），模板作用于最终阶段，流式输出
 src/lib/ai/extract.ts              # 附件提取（≤150MB/文件）：txt 直读、pdf/docx/xlsx/pptx 动态解析、音频走已有转写引擎
-src/lib/ai/exporters.ts            # 六格式导出：md/html(内联排版)/pdf(html2pdf)/doc(Word 兼容 HTML)/xlsx(SheetJS)/pptx(pptxgenjs)，重依赖动态 import
+src/lib/ai/exporters.ts            # 六格式导出：md/html(内联排版)/pdf(打印引擎)/doc(Word 兼容 HTML)/xlsx(SheetJS)/pptx(pptxgenjs)，重依赖动态 import
 src/lib/ai/wechat.ts               # markdown→微信纯文本（emoji 标题+【】+符号列表），供一键复制
 src/lib/models/catalog.ts          # 本地模型目录：ZIPFORMER_ZH_EN（流式）+ SENSEVOICE_OFFLINE（离线）
 src/lib/models/downloader.ts       # 下载器：Cache API 缓存、进度回调、多地址回落、取消
@@ -106,7 +106,8 @@ vite.config.ts                     # dev 服务器 CORS 流式透传代理（/pr
 - **模板**：来自 `scenario-templates` 技能（外部目录 `~\.agents\skills\scenario-templates`）。`scripts/extract-templates.mjs` 从其 gallery HTML 内嵌 JSON 提取 25 套模板（id/scenario/name/desc/modules/prompt + 854 字共享输出契约 G-SPEC）生成 `src/lib/ai/templates.ts`。改模板数据源后重跑脚本即可同步。
 - **总结编排**（summarize.ts）：全文 >12k 字启用 map-reduce——按段落分块（~8000 字/块）并发 2 提取要点 → 要点合集进入最终阶段；模板提示词（含 G-SPEC）只作用于最终阶段；map 上限 120 块（约 100 万字符），超出截断并在结果中注明。最终阶段流式（SSE 逐 delta），AiPage 以 ~150ms 节流渲染。
 - **附件提取**（extract.ts）：txt/md/csv/json 代码类直读；pdf 走 pdfjs-dist（worker 以 `?url` 静态导入）；docx/pptx 用 JSZip 解包 XML 正则提取（**故意不用 mammoth**——其主入口依赖 node fs）；xlsx 用 SheetJS；音频复用 ASR 链路（在线 transcribeFile / 本地优先 SenseVoice 回落 Zipformer）。`.doc`（旧版）不支持，UI 提示另存为 .docx。
-- **导出**（exporters.ts）：md 直接下载；html/pdf/doc 共用 marked+内联 CSS 模板；pdf 用 html2pdf.js（需要隐藏容器注入 DOM）；doc 为 Word 兼容 HTML（Word/WPS 可开）；xlsx 用 SheetJS（概要表+每表格一工作表）；pptx 用 pptxgenjs（h1/h2 分页）。重依赖全部动态 import，均不进首屏 chunk。
+- **富渲染管线**（richRender.ts，预览/导出共用）：G-SPEC 契约会让模型输出 SVG 封面块与 mermaid 图（思维导图/流程图/甘特图），marked 只产出源码块——`renderRichMarkdown` 将 ```mermaid / ```svg 代码块（含无语言标注时的内容特征识别）升级为真实图形；mermaid 输出**不能用 DOMPurify 清洗**（会剥离 foreignObject 内 HTML，文字全丢），改用针对性净化（移除 script/事件属性/javascript: 链接）。流式期间 MarkdownView 走轻量同步路径（图形保持源码），生成完成后自动升级。
+- **导出**（exporters.ts）：md 直接下载；html/doc 共用 marked+内联 CSS 模板；**pdf 走浏览器打印引擎**（window.open 打印窗口自动唤起打印，对话框内选「另存为 PDF」——html2canvas/html-to-image 两条 canvas 光栅化路线在本应用均不可靠：html2canvas 解析 Tailwind v4 的 oklch 颜色抛错且不渲染 foreignObject，离屏/负 z-index 定位又产出空白画布，详见 exporters.ts 注释）；doc 为 Word 兼容 HTML（Word/WPS 可开，内联 SVG 已转 PNG）；xlsx 用 SheetJS（概要表+每表格一工作表）；pptx 用 pptxgenjs（h1/h2 分页，svg/mermaid 转 PNG 插图）。重依赖全部动态 import，均不进首屏 chunk。
 - **微信格式**（wechat.ts）：微信聊天框不保留富文本，逐行转换 markdown → 纯文本（标题→emoji+【】、列表→•、表格→「列:值 ｜ 列:值」）。
 - **LLM 配置**：`settings.ai`（独立于 ASR 的 baseURL/apiKey/model），设置页「AI 总结服务」区块含测试连接。
 - **dev 代理流式化**：vite corsProxyPlugin 已从 `upstream.arrayBuffer()` 整体缓冲改为逐块 pipe（SSE 必须）；`proxy.mjs`（独立部署用）当前仍为整体缓冲——需要流式输出时须同步改造。
@@ -124,6 +125,8 @@ vite.config.ts                     # dev 服务器 CORS 流式透传代理（/pr
 - **离线引擎 Node 端到端冒烟**：MODULARIZE glue 实例化 → FS 导出 → 228MB 模型注入 → SenseVoice 解码输出带标点中文（SAPI 合成语音验证，4.7s 音频 1.2s 解码）
 - **离线引擎浏览器实测**：设置页下载 228MB（hf-mirror）→ Cache API → 引擎初始化「已就绪」→ 文件转写页真实转写成功（结果「今天下午3点开会，请带上季度报告。」）
 - **AI 总结页浏览器冒烟**：导航/页面渲染、25 套模板与场景分组、txt 附件提取（DataTransfer 注入 → 「提取完成」）、未配置 AI 时的引导提示、设置页「AI 总结服务」区块（含测试连接按钮）；构建产物确认重依赖（pdf/xlsx/pptx/html2pdf）均为懒加载 chunk
+- **富渲染实测**（richRender）：mermaid mindmap/甘特图、SVG 代码块全部升级为图形（svgBBox 实际绘制、中文文字保留、表格不受影响、净化后零脚本残留）；打印 HTML 在 iframe 实测渲染出 h1 与 mermaid 图形
+- **切页状态保留实测**：AI 页文本与模板选中状态跨页保留
 - 百炼 qwen3-asr-flash 探测链为预设默认路径；qwen-audio-3.0-asr-flash 专用协议（parameters.format + X-DashScope-SSE 头）已按官方 HTTP API 文档适配，噪声拒识（HAVE_NO_WORDS）按成功处理
 
 **待人工验收**

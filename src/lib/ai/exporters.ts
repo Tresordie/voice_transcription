@@ -20,23 +20,49 @@ async function renderHtmlBody(markdown: string): Promise<string> {
   return renderRichMarkdown(markdown, { dark: false })
 }
 
+const DOC_CSS_RULES = `
+  #ai-export-root h1 { font-size: 1.7em; border-bottom: 3px solid #6366f1; padding-bottom: 10px; margin: 1.2em 0 0.8em; }
+  #ai-export-root h2 { font-size: 1.3em; border-left: 4px solid #6366f1; padding-left: 10px; margin: 1.4em 0 0.6em; }
+  #ai-export-root h3 { font-size: 1.1em; margin: 1.1em 0 0.5em; color: #4338ca; }
+  #ai-export-root table { border-collapse: collapse; width: 100%; margin: 0.8em 0; font-size: 0.92em; }
+  #ai-export-root th { background: #eef2ff; color: #3730a3; }
+  #ai-export-root th, #ai-export-root td { border: 1px solid #d1d5db; padding: 6px 10px; text-align: left; }
+  #ai-export-root tr:nth-child(even) td { background: #f9fafb; }
+  #ai-export-root code { background: #f3f4f6; border-radius: 4px; padding: 1px 5px; font-size: 0.9em; }
+  #ai-export-root pre { background: #111827; color: #e5e7eb; border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
+  #ai-export-root pre code { background: none; color: inherit; }
+  #ai-export-root blockquote { border-left: 4px solid #a5b4fc; background: #f5f6ff; margin: 0.8em 0; padding: 8px 14px; color: #4b5563; }
+  #ai-export-root ul, #ai-export-root ol { padding-left: 1.6em; }
+  #ai-export-root hr { border: none; border-top: 1px solid #e5e7eb; margin: 1.4em 0; }
+`
+// 导出 html/doc 用（独立文档，body 级样式）；pdf 用根作用域版本避免泄漏到应用页面
 const DOC_CSS = `
   body { font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; color: #1f2937;
          line-height: 1.75; max-width: 760px; margin: 0 auto; padding: 32px 24px; }
-  h1 { font-size: 1.7em; border-bottom: 3px solid #6366f1; padding-bottom: 10px; margin: 1.2em 0 0.8em; }
-  h2 { font-size: 1.3em; border-left: 4px solid #6366f1; padding-left: 10px; margin: 1.4em 0 0.6em; }
-  h3 { font-size: 1.1em; margin: 1.1em 0 0.5em; color: #4338ca; }
-  table { border-collapse: collapse; width: 100%; margin: 0.8em 0; font-size: 0.92em; }
-  th { background: #eef2ff; color: #3730a3; }
-  th, td { border: 1px solid #d1d5db; padding: 6px 10px; text-align: left; }
-  tr:nth-child(even) td { background: #f9fafb; }
-  code { background: #f3f4f6; border-radius: 4px; padding: 1px 5px; font-size: 0.9em; }
-  pre { background: #111827; color: #e5e7eb; border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
-  pre code { background: none; color: inherit; }
-  blockquote { border-left: 4px solid #a5b4fc; background: #f5f6ff; margin: 0.8em 0; padding: 8px 14px; color: #4b5563; }
-  ul, ol { padding-left: 1.6em; }
-  hr { border: none; border-top: 1px solid #e5e7eb; margin: 1.4em 0; }
+  ${DOC_CSS_RULES.replaceAll('#ai-export-root', 'body')}
 `
+
+/**
+ * 把富渲染产物中的 .md-figure SVG 替换为 PNG <img>：
+ * html2canvas 不渲染 foreignObject（mermaid 文字会丢）、对内联 SVG 支持不稳；
+ * Word 兼容 HTML 对内联 SVG 同样不可靠。PNG 走 canvas 白底铺底，两处都完美显示。
+ */
+async function replaceFiguresWithPng(root: ParentNode): Promise<void> {
+  const figures = Array.from(root.querySelectorAll('.md-figure'))
+  for (const fig of figures) {
+    const svg = fig.querySelector('svg')
+    if (!svg) continue
+    const svgText = new XMLSerializer().serializeToString(svg)
+    const png = await svgTextToPng(svgText)
+    if (!png) continue
+    const img = document.createElement('img')
+    img.src = png.data
+    img.style.maxWidth = '100%'
+    img.style.display = 'block'
+    img.style.margin = '0 auto'
+    fig.replaceChildren(img)
+  }
+}
 
 function wrapHtmlDocument(bodyHtml: string, title: string): string {
   return `<!DOCTYPE html>
@@ -73,36 +99,45 @@ async function exportHtml(input: ExportInput): Promise<void> {
 
 async function exportPdf(input: ExportInput): Promise<void> {
   const body = await renderHtmlBody(input.markdown)
-  const html2pdf = (await import('html2pdf.js')).default
-  const container = document.createElement('div')
-  container.innerHTML = `<style>${DOC_CSS}</style>${body}`
-  container.style.position = 'fixed'
-  container.style.left = '-9999px'
-  container.style.width = '720px'
-  document.body.appendChild(container)
-  try {
-    await html2pdf()
-      .set({
-        margin: [10, 8, 10, 8],
-        filename: timestampName(input.title || 'AI总结', 'pdf'),
-        image: { type: 'jpeg', quality: 0.96 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      })
-      .from(container)
-      .save()
-  } finally {
-    container.remove()
+  const html = wrapHtmlDocument(body, input.title)
+  // PDF 走浏览器打印引擎（打印对话框内选「另存为 PDF」）：
+  // html2canvas/html-to-image 两条 canvas 光栅化路线在本应用均不可靠——
+  // ① html2canvas 解析 Tailwind v4 的 oklch 颜色抛错（克隆文档无法隔离干净）
+  // ② 两条路线都不渲染 foreignObject（mermaid 文字丢失）③ 离屏定位/负 z-index 产出空白画布
+  // 打印引擎原生渲染，图形/表格/中文字体全部保真。
+  const w = window.open('', '_blank', 'width=880,height=960')
+  if (!w) throw new Error('浏览器拦截了导出窗口，请允许本站弹窗后重试')
+  w.document.open()
+  w.document.write(html)
+  w.document.close()
+  const print = () => {
+    try {
+      w.focus()
+      w.print()
+    } catch {
+      // 用户关闭窗口等场景忽略
+    }
+  }
+  // 等待内嵌 PNG 图片与字体就绪后再唤起打印
+  if (w.document.fonts?.ready) {
+    void w.document.fonts.ready.then(() => setTimeout(print, 300))
+  } else {
+    setTimeout(print, 500)
   }
 }
 
 async function exportDoc(input: ExportInput): Promise<void> {
   const body = await renderHtmlBody(input.markdown)
-  // Word 兼容 HTML（Word/WPS 均可直接打开编辑）
+  // Word 兼容 HTML（Word/WPS 均可直接打开编辑）；内联 SVG 转 PNG（Word 对 SVG 支持不可靠）
+  const parsed = new DOMParser().parseFromString(
+    `<html><head></head><body>${body}</body></html>`,
+    'text/html',
+  )
+  await replaceFiguresWithPng(parsed.body)
   const docHtml = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
 <head><meta charset="utf-8"><title>${input.title}</title>
 <!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View></w:WordDocument></xml><![endif]-->
-<style>${DOC_CSS}</style></head><body>${body}</body></html>`
+<style>${DOC_CSS}</style></head><body>${parsed.body.innerHTML}</body></html>`
   saveBlob(new Blob(['\ufeff', docHtml], { type: 'application/msword;charset=utf-8' }), timestampName(input.title || 'AI总结', 'doc'))
 }
 
@@ -215,13 +250,13 @@ function firstFigureCode(lines: string[]): { kind: 'svg' | 'mermaid'; code: stri
   return null
 }
 
-/** SVG 文本 → PNG dataURL（mermaid 先经 richRender 渲染为 SVG），失败返回 null */
+/** SVG 文本 → PNG dataURL（mermaid 先经 richRender 渲染为 SVG），失败返回 null。
+ *  必须用 data: URL 加载——blob: URL 加载 SVG 会污染 canvas，toDataURL 直接抛错 */
 async function svgTextToPng(
   svgText: string,
 ): Promise<{ data: string; ratio: number } | null> {
   try {
-    const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
+    const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgText)
     const img = await new Promise<HTMLImageElement>((res, rej) => {
       const im = new Image()
       im.onload = () => res(im)
@@ -238,7 +273,6 @@ async function svgTextToPng(
     ctx.fillStyle = '#ffffff' // 深色主题下 canvas 默认透明，PPT 浅底需铺白
     ctx.fillRect(0, 0, canvas.width, canvas.height)
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-    URL.revokeObjectURL(url)
     return { data: canvas.toDataURL('image/png'), ratio }
   } catch {
     return null
