@@ -30,9 +30,9 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
     id: 'bailian',
     label: '阿里百炼',
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    models: ['qwen3-asr-flash'],
+    models: ['qwen3-asr-flash', 'qwen-audio-3.0-asr-flash'],
     keyUrl: 'https://bailian.console.aliyun.com/?apiKey=1#/api-key',
-    note: 'qwen3-asr-flash 中文准确率高、支持方言；北京地域有免费额度（90 天）。必须走内置代理；订阅制 Token Plan 端点不支持语音识别，请勿使用',
+    note: 'qwen3-asr-flash / qwen-audio-3.0-asr-flash 中文准确率高、支持方言热词；北京地域有免费额度（90 天）。必须走内置代理；订阅制 Token Plan 端点不支持语音识别，请勿使用',
   },
   custom: {
     id: 'custom',
@@ -217,48 +217,81 @@ async function transcribeQwenChat(
     attempts.push(`形态5(transcriptions): ${m?.[1] ?? ''} ${(e as Error).message.slice(0, 100)}`)
   }
 
-  // 形态 6：DashScope 原生 multimodal-generation 协议
-  // （Qwen-Audio 旧代际模型不支持 OpenAI 兼容协议，仅支持此协议，路径与 compatible-mode 同域不同路径）
+  // 形态 6：DashScope 原生 multimodal-generation（compatible-mode 同域不同路径）。
+  // 两代协议依次尝试（官方 qwen-audio-asr-http-api）：
+  //  6a. 新代际 Qwen-Audio-ASR（qwen-audio-3.0/3.1-asr-flash）：content 项为
+  //      {type:'input_audio', input_audio:{data}}；parameters.format 必填
+  //      （wav/mp3/opus…），语言走 language_hints，热词上下文走前置 input_text 消息
+  //  6b. 旧代际 qwen-audio / qwen2-audio：content 项为 {audio}，语言走 asr_options
   if (/compatible-mode/i.test(cfg.baseURL)) {
     const nativeBase = cfg.baseURL.replace(/\/compatible-mode\/v\d+.*$/, '')
     const nativeUrl = `${nativeBase}/api/v1/services/aigc/multimodal-generation/generation`
-    const nativeBody: Record<string, unknown> = {
-      model: cfg.model,
-      input: {
-        messages: [
-          ...(cfg.hotwords?.trim() ? [{ role: 'system', content: cfg.hotwords.trim() }] : []),
-          { role: 'user', content: [{ audio: dataUrl }] },
-        ],
-      },
-    }
-    if (cfg.language && cfg.language !== 'auto') {
-      nativeBody.parameters = { asr_options: { language: cfg.language } }
-    }
-    let res: Response
-    try {
-      res = await fetch(nativeUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${cfg.apiKey}`,
-          'Content-Type': 'application/json',
+    const hotContext = cfg.hotwords?.trim()
+      ? [
+          { role: 'user', content: [{ type: 'input_text', text: cfg.hotwords.trim() }] },
+          { role: 'assistant', content: [{ type: 'text', text: '好的。' }] },
+        ]
+      : []
+    const nativeVariants: Array<{ tag: string; body: Record<string, unknown> }> = [
+      {
+        tag: 'new',
+        body: {
+          model: cfg.model,
+          input: {
+            messages: [
+              ...hotContext,
+              { role: 'user', content: [{ type: 'input_audio', input_audio: { data: dataUrl } }] },
+            ],
+          },
+          parameters: {
+            format: fmt,
+            sample_rate: '16000',
+            ...(cfg.language && cfg.language !== 'auto' ? { language_hints: [cfg.language] } : {}),
+          },
         },
-        body: JSON.stringify(nativeBody),
-        signal,
-      })
-    } catch (e) {
-      if ((e as Error).name === 'AbortError') throw e
-      throw networkError()
+      },
+      {
+        tag: 'legacy',
+        body: {
+          model: cfg.model,
+          input: {
+            messages: [
+              ...(hotContext ? [{ role: 'system', content: cfg.hotwords!.trim() }] : []),
+              { role: 'user', content: [{ audio: dataUrl }] },
+            ],
+          },
+          ...(cfg.language && cfg.language !== 'auto'
+            ? { parameters: { asr_options: { language: cfg.language } } }
+            : {}),
+        },
+      },
+    ]
+    for (const { tag, body } of nativeVariants) {
+      let res: Response
+      try {
+        res = await fetch(nativeUrl, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${cfg.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+          signal,
+        })
+      } catch (e) {
+        if ((e as Error).name === 'AbortError') throw e
+        throw networkError()
+      }
+      requestId = res.headers.get('x-request-id') ?? requestId
+      const text = await res.text().catch(() => '')
+      if (res.ok) return parseQwenChatResponse(text)
+      attempts.push(`形态6(${tag}): HTTP ${res.status} ${text.slice(0, 100)}`)
+      if (res.status !== 400) break
     }
-    requestId = res.headers.get('x-request-id') ?? requestId
-    const text = await res.text().catch(() => '')
-    if (res.ok) return parseQwenChatResponse(text)
-    attempts.push(`形态6(native): HTTP ${res.status} ${text.slice(0, 100)}`)
-    if (res.status !== 400) {
-      throw new OnlineError(
-        `百炼接口尝试 ${attempts.length} 种请求形态后停止：${attempts.join('；')}${requestId ? `（request-id: ${requestId}）` : ''}。` +
-          '请到百炼控制台该模型页面复制「调用示例」核对协议，或确认模型已在当前工作区开通',
-      )
-    }
+    throw new OnlineError(
+      `百炼接口尝试 ${attempts.length} 种请求形态后停止：${attempts.join('；')}${requestId ? `（request-id: ${requestId}）` : ''}。` +
+        '请到百炼控制台该模型页面复制「调用示例」核对协议，或确认模型已在当前工作区开通',
+    )
   }
 
   const reqId = requestId ? `（request-id: ${requestId}）` : ''
