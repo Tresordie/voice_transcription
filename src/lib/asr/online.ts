@@ -203,7 +203,7 @@ async function transcribeQwenChat(
     requestId = res.headers.get('x-request-id') ?? requestId
     const text = await res.text().catch(() => '')
     if (res.ok) return parseQwenChatResponse(text)
-    attempts.push(`形态${v + 1}: HTTP ${res.status} ${text.slice(0, 100)}`)
+    attempts.push(`形态${v + 1}: HTTP ${res.status} ${text.slice(0, 200)}`)
     // 401/403/404/5xx 等换形态无意义，只有 400（参数体校验）值得继续尝试
     if (res.status !== 400) break
   }
@@ -214,7 +214,7 @@ async function transcribeQwenChat(
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw e
     const m = (e as Error).message.match(/HTTP (\d+)/)
-    attempts.push(`形态5(transcriptions): ${m?.[1] ?? ''} ${(e as Error).message.slice(0, 100)}`)
+    attempts.push(`形态5(transcriptions): ${m?.[1] ?? ''} ${(e as Error).message.slice(0, 200)}`)
   }
 
   // 形态 6：DashScope 原生 multimodal-generation（compatible-mode 同域不同路径）。
@@ -274,6 +274,8 @@ async function transcribeQwenChat(
           headers: {
             Authorization: `Bearer ${cfg.apiKey}`,
             'Content-Type': 'application/json',
+            // 官方示例必带头：非流式需显式声明 disable（3.0-asr-flash 对响应模式校验严格）
+            'X-DashScope-SSE': 'disable',
           },
           body: JSON.stringify(body),
           signal,
@@ -285,7 +287,7 @@ async function transcribeQwenChat(
       requestId = res.headers.get('x-request-id') ?? requestId
       const text = await res.text().catch(() => '')
       if (res.ok) return parseQwenChatResponse(text)
-      attempts.push(`形态6(${tag}): HTTP ${res.status} ${text.slice(0, 100)}`)
+      attempts.push(`形态6(${tag}): HTTP ${res.status} ${text.slice(0, 200)}`)
       if (res.status !== 400) break
     }
     throw new OnlineError(
