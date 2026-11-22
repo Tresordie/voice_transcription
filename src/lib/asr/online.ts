@@ -203,6 +203,9 @@ async function transcribeQwenChat(
     requestId = res.headers.get('x-request-id') ?? requestId
     const text = await res.text().catch(() => '')
     if (res.ok) return parseQwenChatResponse(text)
+    // 噪声拒识：如 qwen-audio-3.0-asr-flash 对正弦波测试音返回 HAVE_NO_WORDS，
+    // 协议已走通（鉴权/参数/推理均通过），视为空结果
+    if (res.status === 400 && /HAVE_NO_WORDS/.test(text)) return ''
     attempts.push(`形态${v + 1}: HTTP ${res.status} ${text.slice(0, 200)}`)
     // 401/403/404/5xx 等换形态无意义，只有 400（参数体校验）值得继续尝试
     if (res.status !== 400) break
@@ -287,6 +290,8 @@ async function transcribeQwenChat(
       requestId = res.headers.get('x-request-id') ?? requestId
       const text = await res.text().catch(() => '')
       if (res.ok) return parseQwenChatResponse(text)
+      // 噪声拒识：新协议对无语音内容（正弦波/纯静音）返回 HAVE_NO_WORDS，视为空结果
+      if (res.status === 400 && /HAVE_NO_WORDS/.test(text)) return ''
       attempts.push(`形态6(${tag}): HTTP ${res.status} ${text.slice(0, 200)}`)
       if (res.status !== 400) break
     }
@@ -411,8 +416,13 @@ export async function testOnline(cfg: OnlineConfig): Promise<{ ok: boolean; mess
   }
   const wav = encodeWav(pcm, sr)
   try {
-    await transcribeBlob(wav, 'test.wav', cfg)
-    return { ok: true, message: '连接成功：接口可达、鉴权通过' }
+    const text = await transcribeBlob(wav, 'test.wav', cfg)
+    return {
+      ok: true,
+      message:
+        '连接成功：接口可达、鉴权通过' +
+        (text ? '' : '（正弦波测试音无语音内容，模型未返回文字属正常）'),
+    }
   } catch (e) {
     return { ok: false, message: (e as Error).message }
   }
