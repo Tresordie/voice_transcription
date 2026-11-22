@@ -57,5 +57,10 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), corsProxyPlugin()],
   server: {
     host: true,
+    // sherpa 运行时为大型二进制文件，无需 HMR 监视；
+    // 且 Windows 下文件拷贝期间的锁定会触发 EBUSY 导致 dev 服务器崩溃
+    watch: {
+      ignored: ['**/public/sherpa/**'],
+    },
   },
 })
