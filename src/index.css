@@ -169,3 +169,14 @@ body {
 .md-view strong {
   @apply font-semibold text-zinc-900 dark:text-zinc-50;
 }
+/* svg / mermaid 代码块升级后的图形容器 */
+.md-figure {
+  @apply my-4 overflow-x-auto rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-700 dark:bg-zinc-900;
+}
+.md-figure svg {
+  width: 100%;
+  height: auto;
+}
+.md-figure-error {
+  @apply my-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300;
+}

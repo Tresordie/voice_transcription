@@ -454,7 +454,7 @@ export default function AiPage() {
         <section className="card p-5">
           <h2 className="mb-3 font-semibold">总结结果</h2>
           {result ? (
-            <MarkdownView markdown={result} />
+            <MarkdownView markdown={result} rich={!running} />
           ) : (
             <div className="flex items-center gap-2 py-8 text-sm text-zinc-400">
               <Loader2 className="h-5 w-5 animate-spin" /> {stage}

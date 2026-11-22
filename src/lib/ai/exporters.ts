@@ -1,7 +1,9 @@
 // AI 总结结果导出：md / html / pdf / doc(word) / xlsx / pptx
 // 重依赖全部动态 import，只在点击导出时加载对应 chunk
+// html/pdf/doc 共用 richRender 富渲染管线（svg/mermaid 代码块 → 图形），与页面预览所见即所得
 import { downloadText, timestampName } from '../utils'
 import { markdownToWeChat } from './wechat'
+import { renderRichMarkdown, renderMermaidToSvg } from './richRender'
 
 export type ExportFormat = 'md' | 'html' | 'pdf' | 'doc' | 'xlsx' | 'pptx'
 
@@ -15,10 +17,7 @@ export interface ExportInput {
 // ---------- markdown → HTML（导出 html/pdf/doc 共用的排版模板） ----------
 
 async function renderHtmlBody(markdown: string): Promise<string> {
-  const { marked } = await import('marked')
-  const DOMPurify = (await import('dompurify')).default
-  const html = marked.parse(markdown, { async: false }) as string
-  return DOMPurify.sanitize(html)
+  return renderRichMarkdown(markdown, { dark: false })
 }
 
 const DOC_CSS = `
@@ -187,6 +186,65 @@ async function exportXlsx(input: ExportInput): Promise<void> {
   saveBlob(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), timestampName(input.title || 'AI总结', 'xlsx'))
 }
 
+/** 提取块内第一个图形代码块（```mermaid / ```svg），供 PPT 转图 */
+function firstFigureCode(lines: string[]): { kind: 'svg' | 'mermaid'; code: string } | null {
+  let inFence = false
+  let lang = ''
+  let buf: string[] = []
+  for (const l of lines) {
+    const t = l.trim()
+    if (!inFence && t.startsWith('```')) {
+      const declared = t.slice(3).trim().toLowerCase()
+      if (declared === 'mermaid' || declared === 'svg') lang = declared
+      else lang = 'skip' // 非目标围栏，跳过其内容
+      inFence = true
+      buf = []
+      continue
+    }
+    if (inFence) {
+      if (t === '```') {
+        if (lang === 'mermaid' || lang === 'svg') return { kind: lang, code: buf.join('\n') }
+        inFence = false
+        lang = ''
+        buf = []
+        continue
+      }
+      buf.push(l)
+    }
+  }
+  return null
+}
+
+/** SVG 文本 → PNG dataURL（mermaid 先经 richRender 渲染为 SVG），失败返回 null */
+async function svgTextToPng(
+  svgText: string,
+): Promise<{ data: string; ratio: number } | null> {
+  try {
+    const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const img = await new Promise<HTMLImageElement>((res, rej) => {
+      const im = new Image()
+      im.onload = () => res(im)
+      im.onerror = () => rej(new Error('SVG 加载失败'))
+      im.src = url
+    })
+    const ratio = img.width && img.height ? img.height / img.width : 0.42
+    const width = 1400
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = Math.round(width * ratio)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.fillStyle = '#ffffff' // 深色主题下 canvas 默认透明，PPT 浅底需铺白
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    URL.revokeObjectURL(url)
+    return { data: canvas.toDataURL('image/png'), ratio }
+  } catch {
+    return null
+  }
+}
+
 async function exportPptx(input: ExportInput): Promise<void> {
   const PptxGenJS = (await import('pptxgenjs')).default
   const pptx = new PptxGenJS()
@@ -206,19 +264,45 @@ async function exportPptx(input: ExportInput): Promise<void> {
     slide.addText(b.heading ?? input.title, {
       x: 0.6, y: 0.4, w: 8.8, fontSize: 24, bold: true, color: '312e81',
     })
-    // 块内内容 → 要点文本（去掉表格分隔行与代码围栏）
+    // 块内图形（svg/mermaid）→ PNG 插图
+    let fig: { data: string; ratio: number } | null = null
+    const figCode = firstFigureCode(b.lines)
+    if (figCode) {
+      try {
+        const svg =
+          figCode.kind === 'svg' ? figCode.code : await renderMermaidToSvg(figCode.code, false)
+        fig = await svgTextToPng(svg)
+      } catch {
+        fig = null
+      }
+    }
+    // 块内内容 → 要点文本（跳过代码围栏与表格分隔行）
     const bullets: { text: string; options: { bullet?: boolean; fontSize: number } }[] = []
+    let inFence = false
     for (const raw of b.lines) {
       const line = raw.trim()
-      if (!line || /^```/.test(line) || /^\|?[\s:-]+\|/.test(line)) continue
+      if (/^```/.test(line)) {
+        inFence = !inFence
+        continue
+      }
+      if (inFence || !line || /^\|?[\s:-]+\|/.test(line)) continue
       const text = line.replace(/^[-*+]\s+/, '').replace(/^#{3,6}\s+/, '▸ ')
-      bullets.push({ text: text.slice(0, 120), options: { bullet: /^[-*+]\s+/.test(raw), fontSize: 14 } })
+      bullets.push({ text: text.slice(0, 120), options: { bullet: /^[-*+]\s+/.test(raw), fontSize: fig ? 11 : 14 } })
     }
     if (bullets.length) {
       slide.addText(
         bullets.map((b2) => ({ text: b2.text, options: b2.options })),
-        { x: 0.6, y: 1.3, w: 8.8, h: 4.4, fontSize: 14, color: '374151', lineSpacingMultiple: 1.3, valign: 'top' },
+        {
+          x: 0.6, y: fig ? 1.1 : 1.3,
+          w: 8.8, h: fig ? 2.2 : 4.4,
+          fontSize: fig ? 11 : 14, color: '374151', lineSpacingMultiple: 1.25, valign: 'top',
+        },
       )
+    }
+    if (fig) {
+      let w = Math.min(9, 2.05 / fig.ratio)
+      const h = w * fig.ratio
+      slide.addImage({ data: fig.data, x: (10 - w) / 2, y: 3.4 + (2.1 - h) / 2, w, h })
     }
   }
   await pptx.writeFile({ fileName: timestampName(input.title || 'AI总结', 'pptx') })
