@@ -1,7 +1,7 @@
 # VoiceTrans · 项目交接文档
 
 > 本文档面向后续接手维护/开发的工程师。产品介绍见 [README.md](./README.md)。
-> 最后更新：2026-11-21 · 版本 v0.1.0
+> 最后更新：2026-11-22 · 版本 v0.1.x（以 package.json 为准）
 
 ## 1. 项目概况
 
@@ -28,7 +28,8 @@
 ## 3. 目录与关键文件职责
 
 ```
-public/sherpa/                     # 本地引擎运行时（vendored，勿改动）
+public/sherpa/                     # 流式引擎运行时（vendored，勿改动）
+public/sherpa/offline/             # 离线高精度引擎运行时（自建 vad-asr 构建，MODULARIZE+FS；见 §4.4）
 ├── sherpa-onnx-wasm-main-asr.js   #   emscripten glue（非模块化，读全局 Module）
 ├── sherpa-onnx-wasm-main-asr.wasm #   WASM 主体 11.5MB
 └── sherpa-onnx-asr.js             #   官方 JS 封装层 + 我方 epilogue（挂 window.SherpaOnnxASR）
@@ -36,9 +37,10 @@ public/worklets/pcm-collector.js   # AudioWorklet：采集 Float32 块发给主�
 src/lib/audio/wav.ts               # float/int16 转换、降采样、WAV 编码、decodeToPcm16k（OfflineAudioContext 重采样）
 src/lib/audio/capture.ts           # MicRecorder：麦克风采集 + 电平 + MediaRecorder 录制 webm
 src/lib/audio/segmenter.ts         # LiveSegmenter：在线实时模式的 4s 固定分段器
-src/lib/asr/local.ts               # 本地引擎：ensureLocalEngine 单例、LocalStreamSession、transcribePcmLocal、状态订阅 hook
+src/lib/asr/local.ts               # 本地流式引擎：ensureLocalEngine 单例、LocalStreamSession、transcribePcmLocal、状态订阅 hook
+src/lib/asr/offline.ts             # 本地离线高精度引擎（SenseVoice 非流式）：ensureOfflineEngine、transcribePcmOffline、FS 注入模型
 src/lib/asr/online.ts              # 在线客户端：PROVIDERS 预设、transcribeBlob（含百炼 6 形态协议探测链）、transcribeFile（60s 分段）、testOnline
-src/lib/models/catalog.ts          # 本地模型目录（.data 地址、字节数）
+src/lib/models/catalog.ts          # 本地模型目录：ZIPFORMER_ZH_EN（流式）+ SENSEVOICE_OFFLINE（离线）
 src/lib/models/downloader.ts       # 下载器：Cache API 缓存、进度回调、多地址回落、取消
 src/lib/store/settings.tsx         # 设置 Context + localStorage（键 vt:settings）
 src/lib/store/history.ts           # IndexedDB（库 vt-db / 表 history）
@@ -67,7 +69,28 @@ vite.config.ts                     # dev 服务器内置同款代理（/proxy/<�
 2026-11-21 补充：qwen-chat 适配器已升级为**协议形态自动探测**——依次尝试 chat/completions + input_audio 的 4 种字段形态（Data URI / 裸 Base64 × 带/不带 format）→ multipart /audio/transcriptions → DashScope 原生 multimodal-generation（compatible-mode 同域不同路径），成功即用；仅 400（参数体校验）才继续换形态，401/404/5xx 直接停止。全失败时聚合各形态的服务端响应与 request-id 辅助定位。vite dev 服务器内置了 `/proxy` 透传中间件（与 proxy.mjs 等价），设置页提供「改用内置代理」一键把裸百炼地址包成 `http://localhost:5173/proxy/<...>`。
 **实测坑**：百炼实时模型（`fun-asr-realtime` 等 `-realtime` 后缀）只支持 WebSocket 流式协议，对全部 6 种 HTTP 形态必然失败——兼容模式 404 Unsupported model、multipart CORS 拦截、原生端点 400 UNSUPPORTED_FORMAT。HTTP 转写请用 Qwen-ASR 家族（推荐 `qwen3-asr-flash`）。非实时 `fun-asr` 走 DashScope 原生异步文件转写（提交任务 + 轮询），本应用同样未实现。
 
-### 4.4 实时转录的两种实现
+2026-11-22 更新：**已恢复「阿里百炼」预设**（qwen3-asr-flash，dashscope 域名自动识别 qwen-chat 协议），并新增**热词/上下文**支持——`transcribeQwenChat` 的 chat/completions（形态 1-4）与原生端点（形态 6）在热词非空时前置 system message（官方约定：system 仅用于识别上下文），标准 transcriptions 协议则追加 multipart `prompt` 字段。注意：订阅制 Token Plan 端点（token-plan.cn-beijing.maas.aliyuncs.com）官方禁止自动化 API 调用且不提供裸音频 HTTP 接口，不能用于本应用。官方推荐新端点为业务空间专属域名 `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`，经典 dashscope 域名仍可用。
+
+### 4.4 本地离线高精度引擎（SenseVoice，2026-11-22 新增）
+文件转写页在 SenseVoice 模型已缓存时自动切换离线引擎，否则回落流式 zipformer；实时转录页始终用 zipformer（SenseVoice 非流式，无逐字体验）。
+- **构建来源**：无官方预编译产物（v2.0.2 release 只剩 TTS/VAD；asr-models tag 无 wasm），故本地自建。工具链：emsdk 4.0.23 + ninja + cmake 4.5.1（emsdk 不捆绑 cmake/ninja，需自备）。源码 master `8a667ab1`，依赖（kaldi-native-fbank v1.23.1、onnxruntime-wasm simd 1.28.2 等）由 cmake FetchContent 从 GitHub 拉取。
+- **CMake 定制**（相对官方 `wasm/vad-asr/CMakeLists.txt` 三处）：① 移除 silero_vad 强制检查与内置（文件转写固定分块，不用 VAD），.data 仅内置 tokens.txt（317KB）；② `-s MODULARIZE=1 -s EXPORT_NAME=SherpaOnnxVadAsrModule`（独立 factory，与流式引擎的全局 Module 互不冲突）；③ EXPORTED_RUNTIME_METHODS 增加 `'FS'`（运行时注入模型）。
+- **模型分发**：SenseVoice int8（model.int8.onnx 239,233,841 字节）不入库（GitHub 100MB 限制），运行时从 HF 镜像 `csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17` 下载 → Cache API 缓存 → `Module.FS.writeFile('/sense-voice.onnx', bytes)` 注入 MEMFS。运行时四件套（glue/wasm 13.1MB/.data/wrapper）vendor 在 `public/sherpa/offline/`。
+- **wrapper 隔离**：离线 wrapper 是官方 `wasm/asr/sherpa-onnx-asr.js` 的 IIFE 隔离副本，暴露 `window.SherpaOnnxOfflineNS`，与流式引擎（echoyzd 旧版）wrapper 的全局类声明互不覆盖。两套 wrapper 必须各自与同源构建配对（§4.2 ABI 陷阱）。
+- **构建可复现命令**（PowerShell/Git Bash，构建目录 `F:/sherpa-wasm-build/`）：
+  ```
+  source emsdk/emsdk_env.sh
+  cd sherpa-onnx && mkdir build-wasm-simd-vad-asr && cd $_
+  cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=$EMSCRIPTEN/cmake/Modules/Platform/Emscripten.cmake \
+    -DSHERPA_ONNX_ENABLE_WASM_VAD_ASR=ON -DSHERPA_ONNX_ENABLE_WASM=ON -DBUILD_SHARED_LIBS=OFF \
+    -DSHERPA_ONNX_ENABLE_BINARY=OFF -DSHERPA_ONNX_ENABLE_PYTHON=OFF ... ..   # 完整参数见 build-wasm-simd-vad-asr.sh
+  cmake --build . --parallel 8 && cmake --install .
+  node vendor.mjs   # 拷贝 glue/wasm/.data + wrapper IIFE 化 → public/sherpa/offline/
+  node test-offline.cjs  # Node 端到端冒烟（真实模型解码）
+  ```
+- **已知取舍**：① 30s 分块解码（SenseVoice 设计时长为短音频，过长影响标点质量），每块解码阻塞主线程 1-3s；② FS.writeFile 一次性写 228MB，JS 堆 + WASM 堆瞬时双份（INITIAL_MEMORY 512MB + 允许增长）；③ 引擎状态随页面刷新重置，模型缓存（Cache API）持久。
+
+### 4.5 实时转录的两种实现
 - 本地：真·流式（`acceptWaveform` + endpoint 检测定句）。
 - 在线：4s 固定分段 + 尾段 flush，近实时。**已知取舍**：分段边界可能切断词语。
 
@@ -79,11 +102,18 @@ vite.config.ts                     # dev 服务器内置同款代理（/proxy/<�
 - 错误路径：麦克风拒绝提示、在线测试连接的 CORS/401 友好提示
 - **硅基流动浏览器直连可达**（假 Key 返回真实 401 → CORS 通畅，默认开箱路径无障碍）
 
+**已验证（2026-11-22 增补）**
+- `tsc --noEmit` 严格模式 + `vite build` 通过（O2+O3 与 L3 两次提交后均复验）
+- **离线引擎 Node 端到端冒烟**：MODULARIZE glue 实例化 → FS 导出 → 228MB 模型注入 → SenseVoice 解码输出带标点中文（SAPI 合成语音验证，4.7s 音频 1.2s 解码）
+- **离线引擎浏览器实测**：设置页下载 228MB（hf-mirror）→ Cache API → 引擎初始化「已就绪」→ 文件转写页真实转写成功（结果「今天下午3点开会，请带上季度报告。」）
+- 百炼 qwen3-asr-flash 探测链为预设默认路径；qwen3-asr-flash 真实 Key 的成功转写仍待人工验收
+
 **待人工验收**
 - 真实麦克风下的本地流式识别准确率与延迟
 - 真实 API Key 的完整转写流程（含长音频分段）
 - Safari / Firefox 兼容性（目前以 Chrome/Edge 为准）
 - 百炼 qwen-chat 探测链的成功路径（`qwen3-asr-flash` + 真实 Key 完整转写）尚未实测；错误聚合路径已在 fun-asr-realtime 误配场景实测（2026-11-21）
+- 离线引擎长音频（>5 分钟）分段转写的耗时与内存表现；低端设备上 228MB 模型注入的内存峰值
 
 ## 6. 已知限制与坑
 
@@ -102,6 +132,8 @@ vite.config.ts                     # dev 服务器内置同款代理（/proxy/<�
 |---|---|
 | 新增在线服务商 | 改 `src/lib/asr/online.ts` 的 `PROVIDERS` |
 | 更换本地模型 | 改 `src/lib/models/catalog.ts`；**必须确认 `.data` 内文件名与识别器配置一致**（新模型需核对 Space 构建 的 assets 命名） |
+| 升级离线引擎（SenseVoice）wasm | 按 §4.4 重新自建：emsdk + sherpa-onnx master → vad-asr CMake 定制 → vendor 脚本拷入 `public/sherpa/offline/`，wrapper 与 wasm 必须同源配对 |
+| 热词字段 | `AppSettings.hotwords`（localStorage `vt:settings`）；Qwen-ASR 走 system message，transcriptions 走 prompt 字段（`src/lib/asr/online.ts`） |
 | 升级 sherpa 运行时 | 从同一构建源重新下载 glue/wasm/wrapper 三件套整体替换；epilogue 追加段保留 |
 | 发布 | `npm run build` → `dist/` 静态托管（必须 HTTPS 或 localhost；GitHub Pages 子路径需在 `vite.config.ts` 加 `base`） |
 | 出桌面安装包 | Roadmap 项：加 Electron + electron-builder（Win 包本机可出，Mac 包需 Mac 构建），模型可打进安装包实现真离线 |

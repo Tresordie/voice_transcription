@@ -6,8 +6,8 @@
 
 | 引擎 | 说明 | 适合场景 |
 |---|---|---|
-| 🖥️ **本地模型** | sherpa-onnx WASM 在浏览器内离线推理（streaming zipformer 中英双语），数据不出设备 | 隐私敏感、无网络环境 |
-| ☁️ **在线 API** | 自带 API Key（BYOK），支持 OpenAI / Groq / 硅基流动及任意 OpenAI 兼容服务 | 追求最高准确率 |
+| 🖥️ **本地模型** | sherpa-onnx WASM 在浏览器内离线推理（流式 Zipformer 中英 + 非流式 SenseVoice 多语种高精度），数据不出设备 | 隐私敏感、无网络环境 |
+| ☁️ **在线 API** | 自带 API Key（BYOK），支持硅基流动 / 阿里百炼及任意 OpenAI 兼容服务 | 追求最高准确率 |
 
 > 维护者/接手开发请先阅读 [PROJECT_HANDOFF.md](./PROJECT_HANDOFF.md)（架构决策、已知坑、维护指南）。
 
@@ -34,8 +34,10 @@ npm run dev
 ### 使用本地模型
 
 1. 进入「设置」页 → 引擎选择「本地模型」
-2. 点击「下载模型」（约 190MB，从 HuggingFace 镜像下载，国内可直连）
-3. 之后在实时转录 / 文件转写页即可离线使用
+2. 按需下载模型（从 HuggingFace 镜像下载，国内可直连，缓存后离线可用）：
+   - **Zipformer 中英双语 · 流式**（约 190MB）：实时转录逐字出字
+   - **SenseVoice 多语种 · 高精度**（约 228MB）：文件转写用，中文准确率显著更高，自动标点与数字规整
+3. 实时转录走 Zipformer；文件转写在 SenseVoice 已下载时自动切换到高精度引擎，否则回落 Zipformer
 
 ### 使用在线 API
 
@@ -46,11 +48,12 @@ npm run dev
 | 服务商 | 默认模型 | 费用 | 说明 |
 |---|---|---|---|
 | 硅基流动 | FunAudioLLM/SenseVoiceSmall | **免费** | 国内直连，无需代理 |
+| 阿里百炼 | qwen3-asr-flash | 北京地域有免费额度（90 天） | 中文准确率高、支持方言；必须走内置代理 |
 | 自定义 | 任意 OpenAI 兼容 /audio/transcriptions 服务 | 按服务商定价 | |
 
-> - OpenAI / Groq / 阿里百炼均已从默认预设移除，仍可通过「自定义」接入（Base URL + Key + 模型名）
-> - 阿里百炼域名（dashscope/maas.aliyuncs.com）自动识别为 Qwen-ASR 协议，并按 6 种请求形态自动探测（`chat/completions + input_audio` 的 4 种字段形态 → multipart `/audio/transcriptions` → DashScope 原生 `multimodal-generation`），成功即用。推荐模型 `qwen3-asr-flash`；注意 `fun-asr-realtime` 等 `-realtime` 后缀模型仅支持 WebSocket 实时协议，无法经 HTTP 接口调用
-> - 百炼域名未开放浏览器 CORS，必须经代理：开发模式点设置页「改用内置代理」（或手动填 `http://localhost:5173/proxy/<百炼地址>`），独立部署用 `npm run proxy`。注意：Token 计划端点实测对 chat/completions 音频输入返回空体 400（2026-11-21），接入前请先确认模型开通状态与协议
+> - OpenAI / Groq 已从默认预设移除，仍可通过「自定义」接入（Base URL + Key + 模型名）
+> - 阿里百炼域名（dashscope/maas.aliyuncs.com）自动识别为 Qwen-ASR 协议，并按 6 种请求形态自动探测（`chat/completions + input_audio` 的 4 种字段形态 → multipart `/audio/transcriptions` → DashScope 原生 `multimodal-generation`），成功即用。注意 `fun-asr-realtime` 等 `-realtime` 后缀模型仅支持 WebSocket 实时协议，无法经 HTTP 接口调用；订阅制 Token Plan 端点不支持语音识别
+> - 设置页支持**热词 / 上下文**：填入专有名词、人名、品牌或背景说明，提高识别准确率（Qwen-ASR 走识别上下文，OpenAI 兼容服务走 prompt 字段）
 
 ## 隐私与安全
 
@@ -93,7 +96,7 @@ npm run preview # 本地预览构建产物
 
 | 注意事项 | 说明 |
 |---|---|
-| 数据按设备隔离 | 模型缓存（190MB）、API Key、历史记录均存各自浏览器 |
+| 数据按设备隔离 | 模型缓存（流式 190MB / 高精度 228MB）、API Key、历史记录均存各自浏览器 |
 | 免下载使用 | 在线模式 + 硅基流动免费 Key，开箱即用 |
 | 企业内网 | 用自签/内部 CA 证书做 HTTPS（方案见 PROJECT_HANDOFF.md §6） |
 
@@ -107,12 +110,12 @@ npm run preview # 本地预览构建产物
 ## 目录结构
 
 ```
-├── public/sherpa/        # 本地引擎运行时（wasm + 官方封装层）
+├── public/sherpa/        # 本地引擎运行时（wasm + 官方封装层；offline/ 为自建离线构建）
 ├── public/worklets/      # AudioWorklet 采集器
 ├── src/
 │   ├── lib/
 │   │   ├── audio/        # 采集、WAV 编解码、重采样、分段器
-│   │   ├── asr/          # 本地引擎（sherpa-onnx）、在线客户端（OpenAI 兼容 + 百炼 Qwen-ASR 协议探测）
+│   │   ├── asr/          # 本地流式引擎、离线高精度引擎（SenseVoice）、在线客户端（OpenAI 兼容 + 百炼协议探测）
 │   │   ├── models/       # 模型目录与下载缓存
 │   │   └── store/        # 设置、历史
 │   ├── pages/            # 实时转录 / 文件转写 / 历史 / 设置
