@@ -11,15 +11,16 @@ marked.setOptions({ async: false, gfm: true, breaks: false })
 const MERMAID_START =
   /^(flowchart|graph|mindmap|gantt|sequenceDiagram|classDiagram|stateDiagram(-v2)?|erDiagram|journey|pie|gitGraph|quadDiagram|requirementDiagram|sankey-beta|xychart-beta|timeline|block-beta)\b/
 
-/** 判断代码块是否为可渲染图形（svg / mermaid），返回类型 */
+/** 判断代码块是否为可渲染图形（svg / mermaid），返回类型。
+ *  内容特征优先：以 <svg 开头必然是图形（模型常用 xml/html 围栏标注 SVG）；
+ *  以 mermaid 图类型关键字开头必然是图。 */
 export function detectFigure(lang: string, code: string): 'svg' | 'mermaid' | null {
+  const trimmed = code.trim()
+  if (/^<svg[\s>]/i.test(trimmed)) return 'svg'
+  if (MERMAID_START.test(trimmed)) return 'mermaid'
   const l = lang.toLowerCase()
   if (l === 'svg') return 'svg'
   if (l === 'mermaid') return 'mermaid'
-  if (!l) {
-    if (/^\s*<svg[\s>]/i.test(code)) return 'svg'
-    if (MERMAID_START.test(code.trim())) return 'mermaid'
-  }
   return null
 }
 
@@ -27,22 +28,40 @@ let mermaidMod: typeof import('mermaid') | null = null
 
 /** mermaid 渲染为 SVG 字符串（失败抛错，由调用方降级保留源码） */
 export async function renderMermaidToSvg(code: string, dark = false): Promise<string> {
-  if (!mermaidMod) mermaidMod = await import('mermaid')
+  if (!mermaidMod) {
+    mermaidMod = await import('mermaid')
+    try {
+      // ELK 布局引擎：复杂流程图的正交边路由（更少的斜线长边与交叉），失败回落默认 dagre
+      const elk = await import('@mermaid-js/layout-elk')
+      mermaidMod.default.registerLayoutLoaders(elk.default)
+    } catch {
+      // 忽略
+    }
+  }
   const mermaid = mermaidMod.default
-  mermaid.initialize({
+  // defaultRenderer: 'elk' 在 mermaid 12 运行时受支持但类型定义已移除，整体断言
+  const config = {
     startOnLoad: false,
     theme: dark ? 'dark' : 'default',
     securityLevel: 'loose',
     // CJK 长标签适配：加大换行宽度与节点内边距，避免菱形/矩形文字溢出被裁；
-    // fontFamily 与页面实际字体一致，否则 mermaid 的文本宽度测量会失准
-    flowchart: { useMaxWidth: true, htmlLabels: true, wrappingWidth: 280, padding: 14 },
+    // fontFamily 与页面实际字体一致，否则 mermaid 的文本宽度测量会失准；
+    // ELK 作为 flowchart 默认渲染器（需上方 registerLayoutLoaders 成功）
+    flowchart: {
+      useMaxWidth: true,
+      htmlLabels: true,
+      wrappingWidth: 280,
+      padding: 14,
+      defaultRenderer: 'elk',
+    },
     mindmap: { useMaxWidth: true, padding: 12 },
     gantt: { useMaxWidth: true },
     themeVariables: {
       fontSize: '15px',
       fontFamily: '"PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif',
     },
-  })
+  } as Parameters<typeof mermaid.initialize>[0]
+  mermaid.initialize(config)
   const id = `mmd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
   const { svg } = await mermaid.render(id, code.trim())
   return svg
