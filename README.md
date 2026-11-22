@@ -1,6 +1,6 @@
 # VoiceTrans · 网页端语音转写
 
-界面精美、开箱即用的网页端语音转写工具：**实时语音转录** + **录音文件转文字**。
+界面精美、开箱即用的网页端语音转写工具：**实时语音转录** + **录音文件转文字** + **AI 总结**。
 
 双引擎设计，识别率和隐私由你选择：
 
@@ -15,6 +15,7 @@
 
 - **实时转录**：麦克风采集 → 逐字流式显示（本地引擎）或 4 秒分段近实时（在线引擎），波形可视化、录音保存
 - **文件转写**：拖拽上传 wav / mp3 / m4a / ogg / webm 等，自动重采样、长文件自动分段
+- **AI 总结**：文本 / 附件（≤150MB，文档直接解析、音频自动转写）→ 自定义大模型按 25 套预设模板或自定义提示词生成结构化总结；超长文档自动分块理解全文；结果支持 Markdown / HTML / PDF / Word / Excel / PPT 导出与微信格式一键复制
 - **历史记录**：转录结果本地持久化（IndexedDB），支持复制 / 导出 TXT
 - **开箱即用**：模型下载一次后缓存，离线可用；API Key 只存你的浏览器
 
@@ -54,6 +55,15 @@ npm run dev
 > - OpenAI / Groq 已从默认预设移除，仍可通过「自定义」接入（Base URL + Key + 模型名）
 > - 阿里百炼域名（dashscope/maas.aliyuncs.com）自动识别为 Qwen-ASR 协议，并按 6 种请求形态自动探测（`chat/completions + input_audio` 的 4 种字段形态 → multipart `/audio/transcriptions` → DashScope 原生 `multimodal-generation`），成功即用。注意 `fun-asr-realtime` 等 `-realtime` 后缀模型仅支持 WebSocket 实时协议，无法经 HTTP 接口调用；订阅制 Token Plan 端点不支持语音识别
 > - 设置页支持**热词 / 上下文**：填入专有名词、人名、品牌或背景说明，提高识别准确率（Qwen-ASR 走识别上下文，OpenAI 兼容服务走 prompt 字段）
+
+### 使用 AI 总结
+
+1. 进入「设置」页 → 「AI 总结服务」区块，填入任意 OpenAI 兼容大模型的 Base URL / API Key / 模型名（如硅基流动、阿里百炼、DeepSeek、GLM），点「测试连接」确认
+2. 进入「AI 总结」页 → 粘贴文本或上传附件（pdf / docx / xlsx / pptx / txt 直接提取文本；音频自动转写；单文件 ≤150MB）→ 也可「从历史导入」转写记录
+3. 选择预设模板（25 套：会议纪要 / 日报周报 / 任务提取 / 邮件总结 / 邮件撰写）或自由总结，可叠加自定义提示词
+4. 生成后一键导出 Markdown / HTML / PDF / Word / Excel / PPT，或复制「微信格式」直接粘贴到微信发送
+
+> 超长文档会自动分块理解全文后再总结（map-reduce）；模板来自 [scenario-templates](./scripts/extract-templates.mjs) 数据源，可用 `node scripts/extract-templates.mjs` 重新生成。
 
 ## 隐私与安全
 
@@ -116,10 +126,12 @@ npm run preview # 本地预览构建产物
 │   ├── lib/
 │   │   ├── audio/        # 采集、WAV 编解码、重采样、分段器
 │   │   ├── asr/          # 本地流式引擎、离线高精度引擎（SenseVoice）、在线客户端（OpenAI 兼容 + 百炼协议探测）
+│   │   ├── ai/           # AI 总结：模板库（25 套）、LLM 客户端、附件提取、map-reduce 编排、多格式导出、微信格式
 │   │   ├── models/       # 模型目录与下载缓存
 │   │   └── store/        # 设置、历史
-│   ├── pages/            # 实时转录 / 文件转写 / 历史 / 设置
-│   └── components/       # Toast、波形等
+│   ├── pages/            # 实时转录 / 文件转写 / AI 总结 / 历史 / 设置
+│   └── components/       # Toast、波形、Markdown 渲染等
+├── scripts/              # 模板数据提取脚本
 ├── proxy.mjs             # 可选 CORS 透明代理
 └── vite.config.ts
 ```

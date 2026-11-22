@@ -105,3 +105,67 @@ body {
 .animate-pulse-ring {
   animation: pulse-ring 1.5s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
 }
+
+/* ---------- AI 总结 Markdown 美排 ---------- */
+.md-view {
+  @apply text-[15px] leading-7 text-zinc-800 dark:text-zinc-200;
+}
+.md-view h1 {
+  @apply mt-2 mb-4 pb-2 text-xl font-bold tracking-tight border-b-2 border-indigo-500/70
+    text-zinc-900 dark:text-zinc-50;
+}
+.md-view h2 {
+  @apply mt-6 mb-3 pl-2.5 text-lg font-bold border-l-4 border-indigo-500 text-zinc-900 dark:text-zinc-50;
+}
+.md-view h3 {
+  @apply mt-4 mb-2 text-base font-semibold text-indigo-700 dark:text-indigo-300;
+}
+.md-view h4, .md-view h5, .md-view h6 {
+  @apply mt-3 mb-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300;
+}
+.md-view p {
+  @apply my-2.5;
+}
+.md-view ul {
+  @apply my-2.5 pl-5 list-disc space-y-1;
+}
+.md-view ol {
+  @apply my-2.5 pl-5 list-decimal space-y-1;
+}
+.md-view table {
+  @apply my-3 w-full border-collapse text-sm;
+}
+.md-view th {
+  @apply border border-zinc-300 bg-indigo-50 px-2.5 py-1.5 text-left font-semibold text-indigo-900
+    dark:border-zinc-700 dark:bg-indigo-950/60 dark:text-indigo-200;
+}
+.md-view td {
+  @apply border border-zinc-200 px-2.5 py-1.5 align-top dark:border-zinc-800;
+}
+.md-view tbody tr:nth-child(even) td {
+  @apply bg-zinc-50 dark:bg-zinc-800/40;
+}
+.md-view code {
+  @apply rounded bg-zinc-100 px-1.5 py-0.5 text-[13px] font-mono text-rose-600
+    dark:bg-zinc-800 dark:text-rose-400;
+}
+.md-view pre {
+  @apply my-3 overflow-x-auto rounded-xl bg-zinc-900 p-3.5 text-[13px] leading-6 text-zinc-100
+    dark:bg-zinc-800;
+}
+.md-view pre code {
+  @apply bg-transparent p-0 text-inherit;
+}
+.md-view blockquote {
+  @apply my-3 border-l-4 border-indigo-300 bg-indigo-50/60 px-3.5 py-2 text-zinc-600
+    dark:border-indigo-700 dark:bg-indigo-950/40 dark:text-zinc-400;
+}
+.md-view hr {
+  @apply my-5 border-zinc-200 dark:border-zinc-800;
+}
+.md-view a {
+  @apply text-indigo-600 underline underline-offset-2 dark:text-indigo-400;
+}
+.md-view strong {
+  @apply font-semibold text-zinc-900 dark:text-zinc-50;
+}

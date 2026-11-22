@@ -42,7 +42,18 @@ function corsProxyPlugin(): Plugin {
             if (['content-encoding', 'content-length', 'transfer-encoding'].includes(k)) return
             res.setHeader(k, v)
           })
-          res.end(Buffer.from(await upstream.arrayBuffer()))
+          // 流式透传（支持 LLM SSE 逐字输出；body 为空时直接结束）
+          if (!upstream.body) {
+            res.end()
+            return
+          }
+          const reader = upstream.body.getReader()
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            res.write(Buffer.from(value))
+          }
+          res.end()
         } catch (e) {
           res.statusCode = 502
           res.setHeader('content-type', 'text/plain; charset=utf-8')

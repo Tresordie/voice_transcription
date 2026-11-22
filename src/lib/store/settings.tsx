@@ -14,6 +14,13 @@ export type EngineMode = 'local' | 'online'
 export type Language = 'auto' | 'zh' | 'en'
 export type ThemeMode = 'system' | 'light' | 'dark'
 
+/** AI 总结用大模型配置（OpenAI 兼容 chat/completions） */
+export interface AiSettings {
+  baseURL: string
+  apiKey: string
+  model: string
+}
+
 export interface AppSettings {
   engineMode: EngineMode
   language: Language
@@ -26,6 +33,8 @@ export interface AppSettings {
   transport: Transport
   /** 热词/上下文：提高专有名词识别准确率（仅在线引擎） */
   hotwords: string
+  /** AI 总结服务配置 */
+  ai: AiSettings
 }
 
 const STORAGE_KEY = 'vt:settings'
@@ -40,6 +49,7 @@ const DEFAULTS: AppSettings = {
   model: 'FunAudioLLM/SenseVoiceSmall',
   transport: 'transcriptions',
   hotwords: '',
+  ai: { baseURL: '', apiKey: '', model: '' },
 }
 
 function load(): AppSettings {

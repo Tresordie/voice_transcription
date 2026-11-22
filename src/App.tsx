@@ -5,20 +5,23 @@ import {
   History,
   Moon,
   Settings,
+  Sparkles,
   Sun,
 } from 'lucide-react'
 import { SettingsProvider, useSettings } from './lib/store/settings'
 import { ToastProvider } from './components/toast'
 import LivePage from './pages/LivePage'
 import FilePage from './pages/FilePage'
+import AiPage from './pages/AiPage'
 import HistoryPage from './pages/HistoryPage'
 import SettingsPage from './pages/SettingsPage'
 
-export type View = 'live' | 'file' | 'history' | 'settings'
+export type View = 'live' | 'file' | 'ai' | 'history' | 'settings'
 
 const NAV: { id: View; label: string; icon: typeof AudioLines }[] = [
   { id: 'live', label: '实时转录', icon: AudioLines },
   { id: 'file', label: '文件转写', icon: FileAudio2 },
+  { id: 'ai', label: 'AI 总结', icon: Sparkles },
   { id: 'history', label: '历史记录', icon: History },
   { id: 'settings', label: '设置', icon: Settings },
 ]
@@ -116,10 +119,11 @@ function Shell() {
       {/* 主内容 */}
       <main className="flex-1 overflow-y-auto pt-16 md:pt-0">
         <div key={view} className="animate-fade-up mx-auto w-full max-w-4xl px-4 py-6 md:px-8 md:py-10">
-          {view === 'live' && <LivePage />}
-          {view === 'file' && <FilePage />}
-          {view === 'history' && <HistoryPage />}
-          {view === 'settings' && <SettingsPage />}
+    {view === 'live' && <LivePage />}
+    {view === 'file' && <FilePage />}
+    {view === 'ai' && <AiPage />}
+    {view === 'history' && <HistoryPage />}
+    {view === 'settings' && <SettingsPage />}
         </div>
       </main>
     </div>

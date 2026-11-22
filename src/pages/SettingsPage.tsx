@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import { PROVIDERS, needsProxyHint, testOnline, withDevProxy, type ProviderId } from '../lib/asr/online'
+import { chatLLM } from '../lib/ai/llm'
 import {
   cancelLocalDownload,
   ensureLocalEngine,
@@ -136,8 +137,11 @@ export default function SettingsPage() {
   const offlineVer = useOfflineEngineVersion()
 
   const [showKey, setShowKey] = useState(false)
+  const [showAiKey, setShowAiKey] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const [aiTesting, setAiTesting] = useState(false)
+  const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [cachedBytes, setCachedBytes] = useState(0)
   const [offlineBytes, setOfflineBytes] = useState(0)
 
@@ -163,6 +167,21 @@ export default function SettingsPage() {
     })
     setTestResult(r)
     setTesting(false)
+  }
+
+  const runAiTest = async () => {
+    setAiTesting(true)
+    setAiTestResult(null)
+    try {
+      const reply = await chatLLM(settings.ai, [{ role: 'user', content: '回复「OK」两个字母即可' }], {
+        maxTokens: 16,
+      })
+      setAiTestResult({ ok: true, message: `连接成功：模型已应答「${reply.trim().slice(0, 20)}」` })
+    } catch (e) {
+      setAiTestResult({ ok: false, message: (e as Error).message })
+    } finally {
+      setAiTesting(false)
+    }
   }
 
   const downloadModel = async () => {
@@ -397,6 +416,88 @@ export default function SettingsPage() {
           API Key 仅保存在你的浏览器本地（localStorage），请求由浏览器直接发往服务商。
           本应用没有任何后端服务器，不经手你的密钥与音频数据。
         </p>
+      </section>
+
+      {/* AI 总结服务 */}
+      <section className="card p-5">
+        <h2 className="mb-1 font-semibold">AI 总结服务</h2>
+        <p className="mb-4 text-xs text-zinc-500 dark:text-zinc-400">
+          「AI 总结」页调用的大模型（OpenAI 兼容 chat/completions 协议），与语音识别引擎相互独立
+        </p>
+
+        <div className="grid gap-4">
+          <div>
+            <label className="label">Base URL</label>
+            <input
+              className="input font-mono text-xs"
+              value={settings.ai.baseURL}
+              onChange={(e) => update({ ai: { ...settings.ai, baseURL: e.target.value } })}
+              placeholder="https://api.example.com/v1"
+            />
+            <p className="mt-1.5 text-xs text-zinc-400">
+              例：硅基流动 https://api.siliconflow.cn/v1（免费额度）· 阿里百炼
+              https://dashscope.aliyuncs.com/compatible-mode/v1 · 被浏览器跨域拦截时填
+              {' '}http://localhost:5173/proxy/&lt;服务商地址&gt;（独立部署用 npm run proxy）
+            </p>
+          </div>
+          <div>
+            <label className="label">API Key</label>
+            <div className="relative">
+              <input
+                className="input pr-10 font-mono text-xs"
+                type={showAiKey ? 'text' : 'password'}
+                value={settings.ai.apiKey}
+                onChange={(e) => update({ ai: { ...settings.ai, apiKey: e.target.value } })}
+                placeholder="sk-..."
+                autoComplete="off"
+              />
+              <button
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                onClick={() => setShowAiKey((v) => !v)}
+                type="button"
+                title={showAiKey ? '隐藏' : '显示'}
+              >
+                {showAiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+          <div>
+            <label className="label">模型</label>
+            <input
+              className="input font-mono text-xs"
+              value={settings.ai.model}
+              onChange={(e) => update({ ai: { ...settings.ai, model: e.target.value } })}
+              placeholder="如 qwen3-max / deepseek-chat / glm-4-plus"
+            />
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {['qwen3-max', 'qwen-plus', 'deepseek-chat', 'glm-4-plus'].map((m) => (
+                <button
+                  key={m}
+                  onClick={() => update({ ai: { ...settings.ai, model: m } })}
+                  className={`rounded-lg px-2.5 py-1 font-mono text-xs transition-colors ${
+                    settings.ai.model === m
+                      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300'
+                      : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700'
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button className="btn-primary" onClick={runAiTest} disabled={aiTesting}>
+              {aiTesting && <Loader2 className="h-4 w-4 animate-spin" />}
+              测试连接
+            </button>
+            {aiTestResult && (
+              <span className={`text-xs ${aiTestResult.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
+                {aiTestResult.message}
+              </span>
+            )}
+          </div>
+        </div>
       </section>
 
       {/* 本地模型 */}
