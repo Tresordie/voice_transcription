@@ -30,7 +30,7 @@ import {
   timestampName,
 } from '../lib/utils'
 
-export default function LivePage() {
+export default function LivePage({ active = true }: { active?: boolean }) {
   const { settings } = useSettings()
   const toast = useToast()
   useLocalEngineVersion() // 本地引擎状态变化触发重渲染
@@ -182,6 +182,13 @@ export default function LivePage() {
       }
     }
   }, [])
+
+  // 页面切走时自动停止录音：麦克风不再占用，已转写文本保留
+  const stopRef = useRef(stop)
+  stopRef.current = stop
+  useEffect(() => {
+    if (!active && liveRef.current) void stopRef.current()
+  }, [active])
 
   const saveToHistory = async () => {
     if (!fullText.trim()) return

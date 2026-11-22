@@ -19,7 +19,7 @@ import {
 import { useToast } from '../components/toast'
 import { copyText, downloadText, formatDate, formatDuration, timestampName } from '../lib/utils'
 
-export default function HistoryPage() {
+export default function HistoryPage({ active = true }: { active?: boolean }) {
   const toast = useToast()
   const [items, setItems] = useState<HistoryItem[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -34,9 +34,10 @@ export default function HistoryPage() {
     }
   }, [])
 
+  // 页面保持挂载：每次切回本页时刷新列表（捕获其他页面新存入的记录）
   useEffect(() => {
-    void refresh()
-  }, [refresh])
+    if (active) void refresh()
+  }, [active, refresh])
 
   const toggle = (id: string) => {
     setExpanded((s) => {

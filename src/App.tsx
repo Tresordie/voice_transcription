@@ -49,6 +49,16 @@ function Shell() {
     update({ theme: isDark ? 'light' : 'dark' })
   }
 
+  // 切页时重播入场动画（页面保持挂载，需手动重触发 CSS 动画）
+  useEffect(() => {
+    const el = document.querySelector<HTMLElement>(`[data-page="${view}"]`)
+    if (el) {
+      el.classList.remove('animate-fade-up')
+      void el.offsetWidth // 强制重排以重启动画
+      el.classList.add('animate-fade-up')
+    }
+  }, [view])
+
   return (
     <div className="flex h-screen overflow-hidden">
       {/* 侧边栏（桌面） */}
@@ -116,14 +126,24 @@ function Shell() {
         </div>
       </div>
 
-      {/* 主内容 */}
+      {/* 主内容：五个页面保持挂载（切页不丢输入状态），用 hidden 切换可见性 */}
       <main className="flex-1 overflow-y-auto pt-16 md:pt-0">
-        <div key={view} className="animate-fade-up mx-auto w-full max-w-4xl px-4 py-6 md:px-8 md:py-10">
-    {view === 'live' && <LivePage />}
-    {view === 'file' && <FilePage />}
-    {view === 'ai' && <AiPage />}
-    {view === 'history' && <HistoryPage />}
-    {view === 'settings' && <SettingsPage />}
+        <div className="mx-auto w-full max-w-4xl px-4 py-6 md:px-8 md:py-10">
+          <div data-page="live" className={view === 'live' ? 'animate-fade-up' : 'hidden'}>
+            <LivePage active={view === 'live'} />
+          </div>
+          <div data-page="file" className={view === 'file' ? 'animate-fade-up' : 'hidden'}>
+            <FilePage />
+          </div>
+          <div data-page="ai" className={view === 'ai' ? 'animate-fade-up' : 'hidden'}>
+            <AiPage />
+          </div>
+          <div data-page="history" className={view === 'history' ? 'animate-fade-up' : 'hidden'}>
+            <HistoryPage active={view === 'history'} />
+          </div>
+          <div data-page="settings" className={view === 'settings' ? 'animate-fade-up' : 'hidden'}>
+            <SettingsPage />
+          </div>
         </div>
       </main>
     </div>
