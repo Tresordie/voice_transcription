@@ -434,10 +434,22 @@ export default function SettingsPage() {
               onChange={(e) => update({ ai: { ...settings.ai, baseURL: e.target.value } })}
               placeholder="https://api.example.com/v1"
             />
+            {needsProxyHint(settings.ai.baseURL) && (
+              <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
+                <span>⚠️ 阿里云域名未走代理，浏览器直连会被拦截</span>
+                <button
+                  type="button"
+                  className="rounded-lg bg-amber-100 px-2 py-0.5 font-medium text-amber-700 transition-colors hover:bg-amber-200 dark:bg-amber-900/50 dark:text-amber-300 dark:hover:bg-amber-900"
+                  onClick={() => update({ ai: { ...settings.ai, baseURL: withDevProxy(settings.ai.baseURL) } })}
+                >
+                  改用内置代理
+                </button>
+              </p>
+            )}
             <p className="mt-1.5 text-xs text-zinc-400">
               例：硅基流动 https://api.siliconflow.cn/v1（免费额度）· 阿里百炼
-              https://dashscope.aliyuncs.com/compatible-mode/v1 · 被浏览器跨域拦截时填
-              {' '}http://localhost:5173/proxy/&lt;服务商地址&gt;（独立部署用 npm run proxy）
+              https://dashscope.aliyuncs.com/compatible-mode/v1 · 阿里 Token Plan
+              https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1（需 sk-sp- 专属 Key，且必须走代理）
             </p>
           </div>
           <div>
