@@ -3,7 +3,7 @@
 // html/pdf/doc 共用 richRender 富渲染管线（svg/mermaid 代码块 → 图形），与页面预览所见即所得
 import { downloadText, timestampName } from '../utils'
 import { markdownToWeChat } from './wechat'
-import { renderRichMarkdown, renderMermaidToSvg } from './richRender'
+import { renderRichMarkdown, renderMermaidToSvg, sanitizeSvgString, detectFigure } from './richRender'
 import { detectTimeline, timelineEntriesToSvg } from './timeline'
 
 export type ExportFormat = 'md' | 'html' | 'pdf' | 'doc' | 'xlsx' | 'pptx'
@@ -89,8 +89,61 @@ function saveBlob(blob: Blob, filename: string): void {
 
 // ---------- 各格式导出 ----------
 
+/**
+ * markdown 中的 svg/mermaid 代码块 → 内联 SVG 图形（其余 markdown 原样保留）。
+ * 导出的 .md 在 Typora / VS Code / Obsidian 等支持内联 HTML 的查看器中
+ * 可直接显示图形，无需 mermaid 支持；不受支持的查看器中 SVG 以源码保留。
+ */
+export async function upgradeMarkdownFigures(markdown: string): Promise<string> {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  const out: string[] = []
+  let inFence = false
+  let lang = ''
+  let buf: string[] = []
+  const flush = async (): Promise<void> => {
+    const code = buf.join('\n')
+    const kind = detectFigure(lang, code)
+    if (kind === 'svg') {
+      out.push(sanitizeSvgString(code.trim()), '')
+    } else if (kind === 'mermaid') {
+      try {
+        const svg = sanitizeSvgString(await renderMermaidToSvg(code, false))
+        out.push(svg, '')
+      } catch {
+        out.push('```mermaid', code, '```', '')
+      }
+    } else {
+      out.push('```' + lang, ...buf, '```', '')
+    }
+    inFence = false
+    lang = ''
+    buf = []
+  }
+  for (const line of lines) {
+    const t = line.trim()
+    if (!inFence && t.startsWith('```')) {
+      lang = t.slice(3).trim().toLowerCase()
+      inFence = true
+      buf = []
+      continue
+    }
+    if (inFence && t.startsWith('```') && t.length <= 3 + lang.length) {
+      await flush()
+      continue
+    }
+    if (inFence) {
+      buf.push(line)
+      continue
+    }
+    out.push(line)
+  }
+  if (inFence) await flush() // 未闭合围栏兜底
+  return out.join('\n')
+}
+
 async function exportMd(input: ExportInput): Promise<void> {
-  downloadText(input.markdown, timestampName(input.title || 'AI总结', 'md'))
+  const md = await upgradeMarkdownFigures(input.markdown)
+  downloadText(md, timestampName(input.title || 'AI总结', 'md'))
 }
 
 async function exportHtml(input: ExportInput): Promise<void> {

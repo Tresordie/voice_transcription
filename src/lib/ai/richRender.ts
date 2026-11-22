@@ -28,8 +28,7 @@ export function detectFigure(lang: string, code: string): 'svg' | 'mermaid' | nu
 let mermaidMod: typeof import('mermaid') | null = null
 
 /** mermaid 渲染为 SVG 字符串（失败抛错，由调用方降级保留源码） */
-export async function renderMermaidToSvg(code: string, dark = false): Promise<string> {
-  if (!mermaidMod) {
+export async function renderMermaidToSvg(code: string, dark = false): Promise<string> {  if (!mermaidMod) {
     mermaidMod = await import('mermaid')
     try {
       // ELK 布局引擎：复杂流程图的正交边路由（更少的斜线长边与交叉），失败回落默认 dagre
@@ -66,6 +65,20 @@ export async function renderMermaidToSvg(code: string, dark = false): Promise<st
   const id = `mmd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
   const { svg } = await mermaid.render(id, code.trim())
   return svg
+}
+
+/**
+ * 字符串级 SVG 净化（Markdown 导出等非 DOM 场景）：移除脚本类向量。
+ * 不能用 DOMPurify——会剥离 foreignObject 内的 HTML 文字（图表文字全丢）。
+ */
+export function sanitizeSvgString(svg: string): string {
+  return svg
+    .replace(/<script[\s\S]*?<\/script\s*>/gi, '')
+    .replace(/\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(
+      /(href|xlink:href)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]+)/gi,
+      '$1="#"',
+    )
 }
 
 /** sanitize 后可安全内联的 SVG（保留 foreignObject 与命名空间属性） */
