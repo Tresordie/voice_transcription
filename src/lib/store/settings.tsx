@@ -24,6 +24,8 @@ export interface AppSettings {
   model: string
   /** 在线请求协议，随服务商预设自动切换 */
   transport: Transport
+  /** 热词/上下文：提高专有名词识别准确率（仅在线引擎） */
+  hotwords: string
 }
 
 const STORAGE_KEY = 'vt:settings'
@@ -37,6 +39,7 @@ const DEFAULTS: AppSettings = {
   apiKey: '',
   model: 'FunAudioLLM/SenseVoiceSmall',
   transport: 'transcriptions',
+  hotwords: '',
 }
 
 function load(): AppSettings {

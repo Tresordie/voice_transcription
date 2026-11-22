@@ -1,7 +1,7 @@
 // OpenAI 兼容语音识别客户端（POST /v1/audio/transcriptions）
 import { decodeToPcm16k, encodeWav } from '../audio/wav'
 
-export type ProviderId = 'siliconflow' | 'custom'
+export type ProviderId = 'siliconflow' | 'bailian' | 'custom'
 
 /** 在线转写的两种协议 */
 export type Transport = 'transcriptions' | 'qwen-chat'
@@ -26,6 +26,14 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
     keyUrl: 'https://cloud.siliconflow.cn/account/ak',
     note: 'SenseVoiceSmall 完全免费、中文效果好、国内直连',
   },
+  bailian: {
+    id: 'bailian',
+    label: '阿里百炼',
+    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    models: ['qwen3-asr-flash'],
+    keyUrl: 'https://bailian.console.aliyun.com/?apiKey=1#/api-key',
+    note: 'qwen3-asr-flash 中文准确率高、支持方言；北京地域有免费额度（90 天）。必须走内置代理；订阅制 Token Plan 端点不支持语音识别，请勿使用',
+  },
   custom: {
     id: 'custom',
     label: '自定义',
@@ -43,6 +51,8 @@ export interface OnlineConfig {
   language?: string
   /** 请求协议，默认 transcriptions */
   transport?: Transport
+  /** 热词/上下文：提高专有名词准确率（Qwen-ASR 作 system context，OpenAI 兼容作 prompt） */
+  hotwords?: string
 }
 
 export class OnlineError extends Error {
@@ -104,6 +114,7 @@ async function transcribeTranscriptions(
   form.append('model', cfg.model)
   form.append('response_format', 'json')
   if (cfg.language && cfg.language !== 'auto') form.append('language', cfg.language)
+  if (cfg.hotwords?.trim()) form.append('prompt', cfg.hotwords.trim())
 
   let res: Response
   try {
@@ -156,14 +167,16 @@ async function transcribeQwenChat(
   let requestId = ''
 
   const buildBody = (inputAudio: unknown) => {
+    const messages: Array<{ role: string; content: unknown }> = []
+    // 官方约定：system message 仅用于提供识别上下文（背景文本、实体词表）
+    if (cfg.hotwords?.trim()) messages.push({ role: 'system', content: cfg.hotwords.trim() })
+    messages.push({
+      role: 'user',
+      content: [{ type: 'input_audio', input_audio: inputAudio }],
+    })
     const body: Record<string, unknown> = {
       model: cfg.model,
-      messages: [
-        {
-          role: 'user',
-          content: [{ type: 'input_audio', input_audio: inputAudio }],
-        },
-      ],
+      messages,
     }
     // 中英混说时不要指定 language；用户明确选了语种才传（非标准字段）
     if (cfg.language && cfg.language !== 'auto') body.asr_options = { language: cfg.language }
@@ -213,6 +226,7 @@ async function transcribeQwenChat(
       model: cfg.model,
       input: {
         messages: [
+          ...(cfg.hotwords?.trim() ? [{ role: 'system', content: cfg.hotwords.trim() }] : []),
           { role: 'user', content: [{ audio: dataUrl }] },
         ],
       },

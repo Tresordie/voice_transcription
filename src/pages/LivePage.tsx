@@ -60,6 +60,7 @@ export default function LivePage() {
       model: settings.model,
       language: settings.language,
       transport: settings.transport,
+      hotwords: settings.hotwords,
     }),
     [settings],
   )

@@ -78,6 +78,7 @@ export default function FilePage() {
       model: settings.model,
       language: settings.language,
       transport: settings.transport,
+      hotwords: settings.hotwords,
     }),
     [settings],
   )

@@ -67,6 +67,7 @@ export default function SettingsPage() {
       model: settings.model,
       language: settings.language,
       transport: settings.transport,
+      hotwords: settings.hotwords,
     })
     setTestResult(r)
     setTesting(false)
@@ -259,6 +260,20 @@ export default function SettingsPage() {
                 ))}
               </div>
             )}
+          </div>
+
+          <div>
+            <label className="label">热词 / 上下文（可选）</label>
+            <textarea
+              className="input min-h-20 resize-y font-mono text-xs"
+              value={settings.hotwords}
+              onChange={(e) => update({ hotwords: e.target.value })}
+              placeholder={'张伟、专有名词、品牌名\n或自由文本背景说明'}
+              spellCheck={false}
+            />
+            <p className="mt-1.5 text-xs text-zinc-400">
+              每行一个热词或自由文本，提高人名、品牌、领域词的识别准确率；百炼 Qwen-ASR 作为识别上下文，OpenAI 兼容服务作为 prompt 传入
+            </p>
           </div>
 
           <div className="flex items-center gap-3">
