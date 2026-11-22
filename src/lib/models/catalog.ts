@@ -28,4 +28,19 @@ export const ZIPFORMER_ZH_EN: LocalModelInfo = {
   dataFilename: DATA_FILE,
 }
 
-export const LOCAL_MODELS: LocalModelInfo[] = [ZIPFORMER_ZH_EN]
+// SenseVoice 非流式：wasm 运行时在 /sherpa/offline/（自建 vad-asr 构建，
+// 仅内置 tokens.txt），SenseVoice int8 模型（model.int8.onnx）运行时下载。
+// 来源：sherpa-onnx 官方模型仓库（csukuangfj 镜像，hf-mirror 国内直连）
+export const SENSEVOICE_OFFLINE: LocalModelInfo = {
+  id: 'sensevoice-zh-offline',
+  name: 'SenseVoice 多语种 · 高精度',
+  desc: '文件转写用非流式引擎：中文准确率显著更高，自动标点与数字规整；int8 约 228MB，下载后本地缓存',
+  dataBytes: 239233841,
+  dataUrls: [
+    'https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx',
+    'https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx',
+  ],
+  dataFilename: 'model.int8.onnx',
+}
+
+export const LOCAL_MODELS: LocalModelInfo[] = [ZIPFORMER_ZH_EN, SENSEVOICE_OFFLINE]

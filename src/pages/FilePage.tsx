@@ -18,6 +18,7 @@ import {
   transcribePcmLocal,
   useLocalEngineVersion,
 } from '../lib/asr/local'
+import { offlineModelCached, transcribePcmOffline, useOfflineEngineVersion } from '../lib/asr/offline'
 import { transcribeFile, type OnlineConfig } from '../lib/asr/online'
 import { useSettings } from '../lib/store/settings'
 import { addHistoryItem, newId } from '../lib/store/history'
@@ -33,6 +34,7 @@ export default function FilePage() {
   const { settings } = useSettings()
   const toast = useToast()
   useLocalEngineVersion()
+  useOfflineEngineVersion()
 
   const [file, setFile] = useState<File | null>(null)
   const [duration, setDuration] = useState<number | null>(null)
@@ -92,11 +94,21 @@ export default function FilePage() {
     try {
       let text: string
       if (isLocal) {
-        const module = await ensureLocalEngine()
         setStatusMsg('解码音频…')
         const { pcm } = await decodeToPcm16k(file)
-        setStatusMsg('本地识别中（快于实时速度）…')
-        text = await transcribePcmLocal(module, pcm)
+        if (await offlineModelCached()) {
+          // SenseVoice 非流式引擎（高精度、自动标点），模型已缓存时优先使用
+          setStatusMsg('本地识别中（SenseVoice 高精度）…')
+          text = await transcribePcmOffline(
+            pcm,
+            settings.language === 'auto' ? '' : settings.language,
+            { onProgress: (done, total) => setProgress({ done, total }) },
+          )
+        } else {
+          const module = await ensureLocalEngine()
+          setStatusMsg('本地识别中（快于实时速度）…')
+          text = await transcribePcmLocal(module, pcm)
+        }
       } else {
         if (!settings.apiKey) {
           throw new Error('尚未配置在线 API Key，请前往「设置」页填写，或切换到本地模型')

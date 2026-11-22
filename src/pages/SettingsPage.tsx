@@ -24,7 +24,15 @@ import {
   removeLocalModel,
   useLocalEngineVersion,
 } from '../lib/asr/local'
-import { ZIPFORMER_ZH_EN } from '../lib/models/catalog'
+import {
+  cancelOfflineDownload,
+  ensureOfflineEngine,
+  offlineEngineState,
+  offlineModelCachedSize,
+  removeOfflineModel,
+  useOfflineEngineVersion,
+} from '../lib/asr/offline'
+import { SENSEVOICE_OFFLINE, ZIPFORMER_ZH_EN } from '../lib/models/catalog'
 import { useSettings, type Language, type ThemeMode } from '../lib/store/settings'
 import { useToast } from '../components/toast'
 import { formatBytes } from '../lib/utils'
@@ -41,22 +49,106 @@ const THEMES: { id: ThemeMode; label: string; icon: typeof Sun }[] = [
   { id: 'dark', label: '深色', icon: Moon },
 ]
 
+/** 本地模型卡片：两个引擎（流式 zipformer / 离线 SenseVoice）共用一套状态结构 */
+interface ModelCardProps {
+  name: string
+  desc: string
+  sizeBytes: number
+  state: { status: string; received: number; total: number; message: string }
+  cachedBytes: number
+  onDownload: () => void
+  onCancel: () => void
+  onDelete: () => void
+}
+
+function LocalModelCard({ name, desc, sizeBytes, state, cachedBytes, onDownload, onCancel, onDelete }: ModelCardProps) {
+  const busy = state.status === 'downloading' || state.status === 'loading'
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 p-4 dark:border-zinc-700">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-medium">{name}</p>
+          <p className="mt-0.5 text-xs leading-5 text-zinc-500 dark:text-zinc-400">{desc}</p>
+        </div>
+        <span className="shrink-0 rounded-lg bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+          {formatBytes(sizeBytes)}
+        </span>
+      </div>
+
+      {busy && (
+        <div>
+          <div className="mb-1.5 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
+            <span>{state.message}</span>
+            {state.status === 'downloading' && (
+              <span>
+                {formatBytes(state.received)} / {formatBytes(state.total)}
+                {' '}({Math.floor((state.received / Math.max(1, state.total)) * 100)}%)
+              </span>
+            )}
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+            <div
+              className="h-full rounded-full accent-gradient transition-all"
+              style={{
+                width: state.status === 'loading' ? '100%' : `${Math.floor((state.received / Math.max(1, state.total)) * 100)}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {state.status === 'ready' && (
+          <span className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-600 dark:text-emerald-400">
+            <Check className="h-4 w-4" /> 已就绪{cachedBytes > 0 && ` · 缓存 ${formatBytes(cachedBytes)}`}
+          </span>
+        )}
+        {state.status === 'error' && <span className="text-sm text-red-500">{state.message}</span>}
+        {busy ? (
+          state.status === 'downloading' && (
+            <button className="btn-danger" onClick={onCancel}>
+              <X className="h-4 w-4" /> 取消下载
+            </button>
+          )
+        ) : (
+          <>
+            {state.status !== 'ready' && (
+              <button className="btn-primary" onClick={onDownload}>
+                下载模型
+              </button>
+            )}
+            {cachedBytes > 0 && (
+              <button className="btn-danger" onClick={onDelete}>
+                <Trash2 className="h-4 w-4" /> 删除缓存
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const { settings, update, applyProvider } = useSettings()
   const toast = useToast()
   const localVer = useLocalEngineVersion()
+  const offlineVer = useOfflineEngineVersion()
 
   const [showKey, setShowKey] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [cachedBytes, setCachedBytes] = useState(0)
+  const [offlineBytes, setOfflineBytes] = useState(0)
 
   useEffect(() => {
     void localModelCachedSize().then(setCachedBytes)
   }, [localVer])
+  useEffect(() => {
+    void offlineModelCachedSize().then(setOfflineBytes)
+  }, [offlineVer])
 
   const preset = PROVIDERS[settings.provider]
-  const localBusy = localEngineState.status === 'downloading' || localEngineState.status === 'loading'
 
   const runTest = async () => {
     setTesting(true)
@@ -77,6 +169,17 @@ export default function SettingsPage() {
     try {
       await ensureLocalEngine()
       toast.show('success', '本地模型已就绪')
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') {
+        toast.show('error', (e as Error).message)
+      }
+    }
+  }
+
+  const downloadOfflineModel = async () => {
+    try {
+      await ensureOfflineEngine()
+      toast.show('success', '高精度离线模型已就绪')
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
         toast.show('error', (e as Error).message)
@@ -300,88 +403,42 @@ export default function SettingsPage() {
       <section className="card p-5">
         <h2 className="mb-1 font-semibold">本地模型</h2>
         <p className="mb-4 text-xs text-zinc-500 dark:text-zinc-400">
-          首次使用本地引擎时也会自动下载；下载后缓存，离线可用
+          实时转录使用流式模型；文件转写在 SenseVoice 已下载时自动切换到高精度引擎；下载后缓存，离线可用
         </p>
 
-        <div className="flex flex-col gap-3 rounded-xl border border-zinc-200 p-4 dark:border-zinc-700">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="font-medium">{ZIPFORMER_ZH_EN.name}</p>
-              <p className="mt-0.5 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-                {ZIPFORMER_ZH_EN.desc}
-              </p>
-            </div>
-            <span className="shrink-0 rounded-lg bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-              {formatBytes(ZIPFORMER_ZH_EN.dataBytes)}
-            </span>
-          </div>
-
-          {(localEngineState.status === 'downloading' || localEngineState.status === 'loading') && (
-            <div>
-              <div className="mb-1.5 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
-                <span>{localEngineState.message}</span>
-                {localEngineState.status === 'downloading' && (
-                  <span>
-                    {formatBytes(localEngineState.received)} / {formatBytes(localEngineState.total)}
-                    {' '}({Math.floor((localEngineState.received / Math.max(1, localEngineState.total)) * 100)}%)
-                  </span>
-                )}
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
-                <div
-                  className="h-full rounded-full accent-gradient transition-all"
-                  style={{
-                    width:
-                      localEngineState.status === 'loading'
-                        ? '100%'
-                        : `${Math.floor((localEngineState.received / Math.max(1, localEngineState.total)) * 100)}%`,
-                  }}
-                />
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-center gap-2">
-            {localEngineState.status === 'ready' && (
-              <span className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                <Check className="h-4 w-4" /> 已就绪{cachedBytes > 0 && ` · 缓存 ${formatBytes(cachedBytes)}`}
-              </span>
-            )}
-            {localEngineState.status === 'error' && (
-              <span className="text-sm text-red-500">{localEngineState.message}</span>
-            )}
-            {localBusy ? (
-              localEngineState.status === 'downloading' && (
-                <button className="btn-danger" onClick={() => cancelLocalDownload()}>
-                  <X className="h-4 w-4" /> 取消下载
-                </button>
-              )
-            ) : (
-              <>
-                {localEngineState.status !== 'ready' && (
-                  <button className="btn-primary" onClick={downloadModel}>
-                    下载模型
-                  </button>
-                )}
-                {cachedBytes > 0 && (
-                  <button
-                    className="btn-danger"
-                    onClick={async () => {
-                      await removeLocalModel()
-                      setCachedBytes(0)
-                      toast.show('info', '模型缓存已删除')
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4" /> 删除缓存
-                  </button>
-                )}
-              </>
-            )}
-          </div>
+        <div className="flex flex-col gap-4">
+          <LocalModelCard
+            name={ZIPFORMER_ZH_EN.name}
+            desc={ZIPFORMER_ZH_EN.desc}
+            sizeBytes={ZIPFORMER_ZH_EN.dataBytes}
+            state={localEngineState}
+            cachedBytes={cachedBytes}
+            onDownload={downloadModel}
+            onCancel={cancelLocalDownload}
+            onDelete={async () => {
+              await removeLocalModel()
+              setCachedBytes(0)
+              toast.show('info', '模型缓存已删除')
+            }}
+          />
+          <LocalModelCard
+            name={SENSEVOICE_OFFLINE.name}
+            desc={SENSEVOICE_OFFLINE.desc}
+            sizeBytes={SENSEVOICE_OFFLINE.dataBytes}
+            state={offlineEngineState}
+            cachedBytes={offlineBytes}
+            onDownload={downloadOfflineModel}
+            onCancel={cancelOfflineDownload}
+            onDelete={async () => {
+              await removeOfflineModel()
+              setOfflineBytes(0)
+              toast.show('info', '模型缓存已删除')
+            }}
+          />
         </div>
 
         <p className="mt-3 text-xs text-zinc-400">
-          模型为官方 sherpa-onnx WASM 构建（streaming zipformer 中英双语，int8 量化），
+          模型为官方 sherpa-onnx WASM 构建（流式 zipformer 中英双语 int8 / 非流式 SenseVoice 多语种 int8），
           从 HuggingFace 镜像下载，仅缓存在你的浏览器中。
         </p>
       </section>
