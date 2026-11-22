@@ -33,6 +33,15 @@ export async function renderMermaidToSvg(code: string, dark = false): Promise<st
     startOnLoad: false,
     theme: dark ? 'dark' : 'default',
     securityLevel: 'loose',
+    // CJK 长标签适配：加大换行宽度与节点内边距，避免菱形/矩形文字溢出被裁；
+    // fontFamily 与页面实际字体一致，否则 mermaid 的文本宽度测量会失准
+    flowchart: { useMaxWidth: true, htmlLabels: true, wrappingWidth: 280, padding: 14 },
+    mindmap: { useMaxWidth: true, padding: 12 },
+    gantt: { useMaxWidth: true },
+    themeVariables: {
+      fontSize: '15px',
+      fontFamily: '"PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif',
+    },
   })
   const id = `mmd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
   const { svg } = await mermaid.render(id, code.trim())
