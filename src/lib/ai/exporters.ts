@@ -4,6 +4,7 @@
 import { downloadText, timestampName } from '../utils'
 import { markdownToWeChat } from './wechat'
 import { renderRichMarkdown, renderMermaidToSvg } from './richRender'
+import { detectTimeline, timelineEntriesToSvg } from './timeline'
 
 export type ExportFormat = 'md' | 'html' | 'pdf' | 'doc' | 'xlsx' | 'pptx'
 
@@ -325,6 +326,22 @@ async function exportPptx(input: ExportInput): Promise<void> {
 
     // 内容解析：第一个 markdown 表格 → PPT 原生表格；其余行 → 要点（breakLine 逐行换行）
     const table = extractTable(b.lines)
+    // 时间轴表格 → 直观时间轴 SVG 图（替代原生表格）
+    const timelineData = table ? detectTimeline(table.header, table.rows) : null
+    if (timelineData) {
+      try {
+        const svg = timelineEntriesToSvg(timelineData)
+        const png = await svgTextToPng(svg)
+        if (png) {
+          const w = Math.min(8.4, 4.9 / png.ratio)
+          const h = w * png.ratio
+          slide.addImage({ data: png.data, x: (10 - w) / 2, y: 0.9 + (5.1 - h) / 2, w, h })
+          continue
+        }
+      } catch {
+        // 转换失败回落原生表格
+      }
+    }
     const bullets: { text: string; options: Record<string, unknown> }[] = []
     let inFence = false
     for (const raw of b.lines) {

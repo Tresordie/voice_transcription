@@ -4,6 +4,7 @@
 // 预览（MarkdownView）与导出（exporters html/pdf/doc）共用本管线，保证所见即所得导出
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { detectTimeline, renderTimelineHtml } from './timeline'
 
 marked.setOptions({ async: false, gfm: true, breaks: false })
 
@@ -142,6 +143,27 @@ export async function renderRichMarkdown(
       note.textContent = `⚠️ 图表渲染失败（${(e as Error).message.slice(0, 80)}），已保留源码`
       pre.parentElement?.insertBefore(note, pre)
     }
+  }
+
+  // 时间轴表格升级：表头含时间列 + ≥2 条目 → 直观时间轴（timeline.md 规范样式）
+  const tables = Array.from(container.querySelectorAll('table'))
+  for (const tbl of tables) {
+    const headerCells = tbl.querySelectorAll('thead th').length
+      ? Array.from(tbl.querySelectorAll('thead th'))
+      : tbl.querySelector('tr')
+        ? Array.from(tbl.querySelector('tr')!.children)
+        : []
+    const header = headerCells.map((c) => c.textContent?.trim() ?? '')
+    const bodyRows = tbl.querySelectorAll('tbody tr').length
+      ? Array.from(tbl.querySelectorAll('tbody tr'))
+      : Array.from(tbl.querySelectorAll('tr')).slice(header.length ? 1 : 0)
+    const rows = bodyRows.map((tr) => Array.from(tr.children).map((td) => td.textContent?.trim() ?? ''))
+    const data = detectTimeline(header, rows)
+    if (!data) continue
+    const holder = document.createElement('div')
+    holder.className = 'md-figure'
+    holder.innerHTML = renderTimelineHtml(data)
+    tbl.replaceWith(holder)
   }
   return container.innerHTML
 }
