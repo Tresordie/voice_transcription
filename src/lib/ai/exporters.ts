@@ -22,6 +22,9 @@ async function renderHtmlBody(markdown: string): Promise<string> {
 }
 
 const DOC_CSS_RULES = `
+  #ai-export-root img { max-width: 100%; }
+  #ai-export-root .md-figure { margin: 1.2em 0; }
+  #ai-export-root .md-figure svg { max-width: 100%; height: auto; }
   #ai-export-root h1 { font-size: 1.7em; border-bottom: 3px solid #6366f1; padding-bottom: 10px; margin: 1.2em 0 0.8em; }
   #ai-export-root h2 { font-size: 1.3em; border-left: 4px solid #6366f1; padding-left: 10px; margin: 1.4em 0 0.6em; }
   #ai-export-root h3 { font-size: 1.1em; margin: 1.1em 0 0.5em; color: #4338ca; }
@@ -43,10 +46,15 @@ const DOC_CSS = `
   ${DOC_CSS_RULES.replaceAll('#ai-export-root', 'body')}
 `
 
+/** Word 可打印区域宽度（A4 - 默认页边距，96dpi 像素） */
+const WORD_IMG_WIDTH = 600
+
 /**
  * 把富渲染产物中的 .md-figure SVG 替换为 PNG <img>：
  * html2canvas 不渲染 foreignObject（mermaid 文字会丢）、对内联 SVG 支持不稳；
  * Word 兼容 HTML 对内联 SVG 同样不可靠。PNG 走 canvas 白底铺底，两处都完美显示。
+ * img 显式设置 width/height 属性——Word/WPS 不理会 max-width 样式，
+ * 1400px 原图会超出页面被裁（用户实测）。
  */
 async function replaceFiguresWithPng(root: ParentNode): Promise<void> {
   const figures = Array.from(root.querySelectorAll('.md-figure'))
@@ -58,9 +66,8 @@ async function replaceFiguresWithPng(root: ParentNode): Promise<void> {
     if (!png) continue
     const img = document.createElement('img')
     img.src = png.data
-    img.style.maxWidth = '100%'
-    img.style.display = 'block'
-    img.style.margin = '0 auto'
+    img.width = WORD_IMG_WIDTH
+    img.height = Math.round(WORD_IMG_WIDTH * png.ratio)
     fig.replaceChildren(img)
   }
 }
@@ -188,6 +195,21 @@ async function exportDoc(input: ExportInput): Promise<void> {
     'text/html',
   )
   await replaceFiguresWithPng(parsed.body)
+  // PNG 转换失败的兜底：内联 SVG 显式缩放到可打印宽度（Word 不理会 max-width 样式）
+  parsed.body.querySelectorAll('.md-figure svg').forEach((svg) => {
+    const vb = (svg.getAttribute('viewBox') ?? '')
+      .split(/[\s,]+/)
+      .map(Number)
+      .filter((n) => !Number.isNaN(n))
+    if (vb.length === 4 && vb[2] > 0) {
+      svg.setAttribute('width', String(WORD_IMG_WIDTH))
+      svg.setAttribute('height', String(Math.round((WORD_IMG_WIDTH * vb[3]) / vb[2])))
+    } else {
+      svg.setAttribute('width', String(WORD_IMG_WIDTH))
+      svg.setAttribute('height', String(Math.round(WORD_IMG_WIDTH * 0.4)))
+    }
+    svg.removeAttribute('style')
+  })
   const docHtml = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
 <head><meta charset="utf-8"><title>${input.title}</title>
 <!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View></w:WordDocument></xml><![endif]-->
