@@ -279,6 +279,17 @@ async function svgTextToPng(
   }
 }
 
+/** 行内 markdown 清理（PPT/表格单元格用）：去掉 **加粗**、`代码`、链接等标记 */
+function inlineClean(s: string): string {
+  return s
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .trim()
+}
+
 async function exportPptx(input: ExportInput): Promise<void> {
   const PptxGenJS = (await import('pptxgenjs')).default
   const pptx = new PptxGenJS()
@@ -291,7 +302,8 @@ async function exportPptx(input: ExportInput): Promise<void> {
   cover.addText(new Date().toLocaleDateString('zh-CN'), { x: 0.6, y: 3.4, w: 8.8, fontSize: 14, color: 'c7d2fe' })
 
   const blocks = splitMarkdownBlocks(input.markdown).filter(
-    (b) => b.heading !== null || b.lines.some((l) => l.trim()),
+    // 只有标题、没有内容行的块（如全文大标题）不生成幻灯片——封面已含标题
+    (b) => b.lines.some((l) => l.trim()),
   )
   for (const b of blocks) {
     const slide = pptx.addSlide()
@@ -310,8 +322,10 @@ async function exportPptx(input: ExportInput): Promise<void> {
         fig = null
       }
     }
-    // 块内内容 → 要点文本（跳过代码围栏与表格分隔行）
-    const bullets: { text: string; options: { bullet?: boolean; fontSize: number } }[] = []
+
+    // 内容解析：第一个 markdown 表格 → PPT 原生表格；其余行 → 要点（breakLine 逐行换行）
+    const table = extractTable(b.lines)
+    const bullets: { text: string; options: Record<string, unknown> }[] = []
     let inFence = false
     for (const raw of b.lines) {
       const line = raw.trim()
@@ -319,17 +333,71 @@ async function exportPptx(input: ExportInput): Promise<void> {
         inFence = !inFence
         continue
       }
-      if (inFence || !line || /^\|?[\s:-]+\|/.test(line)) continue
-      const text = line.replace(/^[-*+]\s+/, '').replace(/^#{3,6}\s+/, '▸ ')
-      bullets.push({ text: text.slice(0, 120), options: { bullet: /^[-*+]\s+/.test(raw), fontSize: fig ? 11 : 14 } })
+      if (inFence || !line) continue
+      // 表格行交给 addTable（内容行与分隔行都跳过）
+      if (line.startsWith('|')) continue
+      // 分割线跳过
+      if (/^(-{3,}|={3,}|\*{3,})$/.test(line)) continue
+      const heading = line.match(/^(#{3,6})\s+(.*)$/)
+      const text = inlineClean(heading ? `▸ ${heading[2]}` : line.replace(/^[-*+]\s+/, ''))
+      if (text) {
+        bullets.push({
+          text: text.slice(0, 160),
+          options: {
+            bullet: /^[-*+]\s+/.test(raw) && !heading,
+            breakLine: true, // 关键：不设则所有段落在同一行内流动
+            fontSize: fig ? 10 : 13,
+          },
+        })
+      }
     }
-    if (bullets.length) {
+
+    // 布局（防重叠的确定性分支）：
+    //   图+表格：表格在上（≤8 行），图形在下，要点省略
+    //   图+无表格：要点压上半，图形占下半
+    //   无图+表格：表格在上，要点在下
+    //   都没有：要点占满
+    const hasTable = table && table.rows.length > 0
+    const maxTableRows = fig ? 8 : 14
+    const tableRowCount = hasTable ? Math.min(table!.rows.length, maxTableRows) + 1 : 0
+    const tableH = hasTable ? Math.min(3.6, tableRowCount * 0.32 + 0.15) : 0
+
+    if (hasTable) {
+      const header = table!.header.map((h) => ({
+        text: inlineClean(h).slice(0, 40),
+        options: { bold: true, color: '3730a3', fill: { color: 'eef2ff' } },
+      }))
+      const rows = [
+        header,
+        ...table!.rows.slice(0, maxTableRows).map((r) =>
+          r.map((c) => ({ text: inlineClean(c).slice(0, 80) })),
+        ),
+      ]
+      const yTop = fig ? 1.05 : 1.25
+      slide.addTable(rows, {
+        x: 0.6, y: yTop, w: 8.8,
+        fontSize: 11, border: { pt: 1, color: 'd1d5db' },
+        margin: 0.06, valign: 'middle', autoPage: false,
+      })
+      if (table!.rows.length > maxTableRows) {
+        slide.addText(`（表格共 ${table!.rows.length} 行，此处仅显示前 ${maxTableRows} 行，完整内容见 Word / HTML 导出）`, {
+          x: 0.6, y: yTop + tableH + 0.05, w: 8.8, fontSize: 9, italic: true, color: '9ca3af',
+        })
+      }
+    }
+
+    const showBullets =
+      bullets.length > 0 && !(fig && hasTable) && !(hasTable && 1.25 + tableH > 4.6)
+    if (showBullets) {
+      const yTop = fig ? 1.05 : hasTable ? 1.25 + tableH + 0.1 : 1.3
+      const hAvail = fig ? (hasTable ? 1.9 : 2.2) : hasTable ? 5.55 - yTop : 4.4
       slide.addText(
         bullets.map((b2) => ({ text: b2.text, options: b2.options })),
         {
-          x: 0.6, y: fig ? 1.1 : 1.3,
-          w: 8.8, h: fig ? 2.2 : 4.4,
-          fontSize: fig ? 11 : 14, color: '374151', lineSpacingMultiple: 1.25, valign: 'top',
+          x: 0.6, y: yTop,
+          w: 8.8, h: Math.max(1.2, hAvail),
+          fontSize: fig ? 10 : 13, color: '374151', lineSpacingMultiple: 1.2,
+          valign: 'top', fit: 'shrink', // 超出时自动缩字号防溢出
         },
       )
     }
