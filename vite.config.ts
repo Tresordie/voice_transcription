@@ -1,4 +1,9 @@
 /// <reference types="node" />
+import { execFile as execFileCb } from 'node:child_process'
+import { existsSync, promises as fsp } from 'node:fs'
+import path from 'node:path'
+import { promisify } from 'node:util'
+import type { IncomingMessage } from 'node:http'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -64,8 +69,165 @@ function corsProxyPlugin(): Plugin {
   }
 }
 
+// 开发服务器内置 git 备份服务：/backup-api
+// 「历史记录」页一键把转录历史 JSON 写入备份仓库 data/history.json，
+// 自动 commit + push 到 origin 的全部推送地址（默认 GitHub + Gitee 双端）。
+// 备份仓库默认取项目同级 ../voice_transcription_database，可用环境变量
+// BACKUP_REPO_PATH 覆盖。仅本机 dev 场景可用；接口不存在时前端自动退回浏览器下载。
+function backupPlugin(): Plugin {
+  const repoPath =
+    process.env.BACKUP_REPO_PATH ||
+    path.resolve(process.cwd(), '../voice_transcription_database')
+  const dataFile = path.join(repoPath, 'data', 'history.json')
+
+  type GitFail = Error & { stderr?: string }
+  const exec = promisify(execFileCb)
+  const run = (args: string[]) =>
+    exec('git', args, { cwd: repoPath, windowsHide: true, maxBuffer: 1024 * 1024 })
+
+  const isRepo = () => existsSync(path.join(repoPath, '.git'))
+
+  const readBody = (req: IncomingMessage) =>
+    new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = []
+      req.on('data', (c) => chunks.push(c as Buffer))
+      req.on('error', reject)
+      req.on('end', () => resolve(Buffer.concat(chunks)))
+    })
+
+  /** origin 的全部推送地址（双推配置下为多条；未配置 pushurl 时回落 url） */
+  async function pushUrls(): Promise<string[]> {
+    try {
+      const { stdout } = await run(['config', '--get-all', 'remote.origin.pushurl'])
+      const urls = stdout
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+      if (urls.length > 0) return urls
+    } catch {
+      // 回落到 url
+    }
+    try {
+      const { stdout } = await run(['config', '--get', 'remote.origin.url'])
+      return stdout.trim() ? [stdout.trim()] : []
+    } catch {
+      return []
+    }
+  }
+
+  /** 逐条推送当前分支，回报每个远端的结果（部分失败不影响其余） */
+  async function pushBranch(): Promise<{ url: string; ok: boolean; detail?: string }[]> {
+    const { stdout } = await run(['rev-parse', '--abbrev-ref', 'HEAD'])
+    const branch = stdout.trim() || 'master'
+    const results: { url: string; ok: boolean; detail?: string }[] = []
+    for (const url of await pushUrls()) {
+      try {
+        await run(['push', url, branch])
+        results.push({ url, ok: true })
+      } catch (e) {
+        const err = e as GitFail
+        const detail = (err.stderr || err.message || '')
+          .trim()
+          .split(/\r?\n/)
+          .slice(-2)
+          .join(' ⏎ ')
+        results.push({ url, ok: false, detail })
+      }
+    }
+    return results
+  }
+
+  /** data/history.json 有变化时提交（仅限该路径，不携带仓库里其他暂存内容） */
+  async function commitIfChanged(count?: number): Promise<boolean> {
+    await run(['add', 'data/history.json'])
+    const { stdout } = await run(['status', '--porcelain', '--', 'data/history.json'])
+    if (!stdout.trim()) return false
+    const ts = new Date().toLocaleString('zh-CN', { hour12: false })
+    const msg = `backup: 历史记录备份 ${ts}${typeof count === 'number' ? ` · ${count} 条` : ''}`
+    await run(['commit', '-m', msg, '--', 'data/history.json'])
+    return true
+  }
+
+  async function statusPayload() {
+    const fileExists = existsSync(dataFile)
+    const payload: {
+      connected: boolean
+      repoPath: string
+      fileExists: boolean
+      fileMtime: string | null
+      lastCommit: { hash: string; date: string; message: string } | null
+    } = { connected: true, repoPath, fileExists, fileMtime: null, lastCommit: null }
+    if (fileExists) {
+      payload.fileMtime = (await fsp.stat(dataFile)).mtime.toISOString()
+    }
+    try {
+      const { stdout } = await run(['log', '-1', '--format=%h|%cI|%s', '--', 'data/history.json'])
+      const line = stdout.trim()
+      if (line) {
+        const [hash, date, ...rest] = line.split('|')
+        payload.lastCommit = { hash, date, message: rest.join('|') }
+      }
+    } catch {
+      // 尚无涉及该文件的提交
+    }
+    return payload
+  }
+
+  return {
+    name: 'dev-backup-service',
+    configureServer(server) {
+      server.middlewares.use('/backup-api', async (req, res) => {
+        const send = (code: number, data: unknown) => {
+          res.statusCode = code
+          res.setHeader('content-type', 'application/json; charset=utf-8')
+          res.end(JSON.stringify(data))
+        }
+        const route = (req.url || '').split('?')[0]
+        try {
+          // GET /status：备份仓库路径、data/history.json 状态、最近提交
+          if (req.method === 'GET' && route === '/status') {
+            if (!isRepo()) return send(200, { connected: false, repoPath })
+            return send(200, await statusPayload())
+          }
+          // POST /save：写入 data/history.json + 自动 commit + push
+          // POST /push：手动推送（把已存在的 data/history.json 提交并推送）
+          if (req.method === 'POST' && (route === '/save' || route === '/push')) {
+            if (!isRepo()) return send(500, { ok: false, error: `备份仓库不存在：${repoPath}` })
+            if (route === '/save') {
+              const body = (await readBody(req)).toString('utf8')
+              let count: number
+              try {
+                const parsed = JSON.parse(body) as { items?: unknown }
+                const items = Array.isArray(parsed) ? parsed : parsed?.items
+                if (!Array.isArray(items)) throw new Error('no items')
+                count = items.length
+              } catch {
+                return send(400, { ok: false, error: 'JSON 格式不正确：应为含 items 数组的历史备份' })
+              }
+              await fsp.mkdir(path.dirname(dataFile), { recursive: true })
+              await fsp.writeFile(dataFile, body, 'utf8')
+              const committed = await commitIfChanged(count)
+              const pushed = await pushBranch()
+              return send(200, { ok: true, committed, pushed })
+            }
+            if (!existsSync(dataFile)) {
+              return send(400, { ok: false, error: 'data/history.json 尚不存在，请先「备份并推送」生成' })
+            }
+            const committed = await commitIfChanged()
+            const pushed = await pushBranch()
+            return send(200, { ok: true, committed, pushed })
+          }
+          return send(404, { error: '未知接口' })
+        } catch (e) {
+          return send(500, { ok: false, error: (e as Error).message })
+        }
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss(), corsProxyPlugin()],
+  plugins: [react(), tailwindcss(), corsProxyPlugin(), backupPlugin()],
   server: {
     host: true,
     // sherpa 运行时为大型二进制文件，无需 HMR 监视；
