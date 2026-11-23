@@ -82,8 +82,9 @@ function backupPlugin(): Plugin {
 
   type GitFail = Error & { stderr?: string }
   const exec = promisify(execFileCb)
+  // maxBuffer 需容纳 data/history.json 整文件内容（git show 读取版本内容用）
   const run = (args: string[]) =>
-    exec('git', args, { cwd: repoPath, windowsHide: true, maxBuffer: 1024 * 1024 })
+    exec('git', args, { cwd: repoPath, windowsHide: true, maxBuffer: 64 * 1024 * 1024 })
 
   const isRepo = () => existsSync(path.join(repoPath, '.git'))
 
@@ -188,6 +189,37 @@ function backupPlugin(): Plugin {
           if (req.method === 'GET' && route === '/status') {
             if (!isRepo()) return send(200, { connected: false, repoPath })
             return send(200, await statusPayload())
+          }
+          // GET /versions：data/history.json 的备份版本列表（最近 50 条提交）
+          if (req.method === 'GET' && route === '/versions') {
+            if (!isRepo()) return send(500, { ok: false, error: `备份仓库不存在：${repoPath}` })
+            try {
+              const { stdout } = await run(['log', '--max-count=50', '--format=%h|%cI|%s', '--', 'data/history.json'])
+              const versions = stdout
+                .split(/\r?\n/)
+                .filter(Boolean)
+                .map((line) => {
+                  const [hash, date, ...rest] = line.split('|')
+                  return { hash, date, message: rest.join('|') }
+                })
+              return send(200, { ok: true, versions })
+            } catch {
+              return send(200, { ok: true, versions: [] }) // 文件尚无提交历史
+            }
+          }
+          // GET /version?hash=<sha>：读取指定版本的 data/history.json 内容
+          if (req.method === 'GET' && route === '/version') {
+            if (!isRepo()) return send(500, { ok: false, error: `备份仓库不存在：${repoPath}` })
+            const hash = new URL(req.url || '/', 'http://localhost').searchParams.get('hash') || ''
+            if (!/^[0-9a-f]{7,40}$/.test(hash)) {
+              return send(400, { ok: false, error: '无效的提交哈希' })
+            }
+            try {
+              const { stdout } = await run(['show', `${hash}:data/history.json`])
+              return send(200, { ok: true, content: stdout })
+            } catch (e) {
+              return send(404, { ok: false, error: `该版本不存在此文件：${(e as GitFail).stderr?.trim().split(/\r?\n/)[0] || (e as Error).message}` })
+            }
           }
           // POST /save：写入 data/history.json + 自动 commit + push
           // POST /push：手动推送（把已存在的 data/history.json 提交并推送）

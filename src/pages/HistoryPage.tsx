@@ -40,6 +40,21 @@ interface BackupOpResult {
   pushed?: BackupPushed[]
   error?: string
 }
+interface BackupVersion {
+  hash: string
+  date: string
+  message: string
+}
+interface BackupVersionsResult {
+  ok: boolean
+  versions?: BackupVersion[]
+  error?: string
+}
+interface BackupVersionContentResult {
+  ok: boolean
+  content?: string
+  error?: string
+}
 
 const remoteName = (url: string) =>
   url.includes('github') ? 'GitHub' : url.includes('gitee') ? 'Gitee' : url
@@ -58,6 +73,10 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null)
   const [backupResult, setBackupResult] = useState<BackupOpResult | null>(null)
   const [backupBusy, setBackupBusy] = useState(false)
+  const [backupVersions, setBackupVersions] = useState<BackupVersion[]>([])
+  const [versionsOpen, setVersionsOpen] = useState(false)
+  const [preview, setPreview] = useState<{ version: BackupVersion; items: HistoryItem[] } | null>(null)
+  const [previewBusy, setPreviewBusy] = useState(false)
   const [backupIntervalMin, setBackupIntervalMin] = useState<number>(() => {
     const v = Number(localStorage.getItem(BACKUP_INTERVAL_KEY))
     return Number.isFinite(v) && (v === 0 || BACKUP_INTERVAL_OPTIONS.includes(v)) ? v : BACKUP_INTERVAL_DEFAULT
@@ -83,6 +102,13 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
       setBackupStatus(await r.json())
     } catch {
       setBackupStatus({ connected: false, repoPath: '' })
+    }
+    try {
+      const r = await fetch('/backup-api/versions')
+      const data: BackupVersionsResult = await r.json()
+      setBackupVersions(r.ok && data.ok ? data.versions ?? [] : [])
+    } catch {
+      setBackupVersions([])
     }
   }, [])
 
@@ -178,6 +204,56 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
       showToast('error', '备份服务未连接')
     } finally {
       setBackupBusy(false)
+    }
+  }
+
+  // 预览指定备份版本：解析其中的转录记录供查看/导入
+  const openPreview = async (version: BackupVersion) => {
+    setPreviewBusy(true)
+    try {
+      const r = await fetch(`/backup-api/version?hash=${version.hash}`)
+      const data: BackupVersionContentResult = await r.json()
+      if (!r.ok || !data.ok || typeof data.content !== 'string') {
+        throw new Error(data.error || `HTTP ${r.status}`)
+      }
+      const parsed = JSON.parse(data.content) as { items?: unknown }
+      const items = Array.isArray(parsed) ? parsed : parsed?.items
+      if (!Array.isArray(items)) throw new Error('缺少 items 数组')
+      setPreview({ version, items: items as HistoryItem[] })
+    } catch (e) {
+      showToast('error', `预览失败：${(e as Error).message}`)
+    } finally {
+      setPreviewBusy(false)
+    }
+  }
+
+  // 下载指定备份版本的 JSON 文件
+  const downloadVersion = async (version: BackupVersion) => {
+    setPreviewBusy(true)
+    try {
+      const r = await fetch(`/backup-api/version?hash=${version.hash}`)
+      const data: BackupVersionContentResult = await r.json()
+      if (!r.ok || !data.ok || typeof data.content !== 'string') {
+        throw new Error(data.error || `HTTP ${r.status}`)
+      }
+      downloadText(data.content, `历史备份-${version.date.slice(0, 10)}-${version.hash.slice(0, 7)}.json`)
+      showToast('success', '已下载')
+    } catch (e) {
+      showToast('error', `下载失败：${(e as Error).message}`)
+    } finally {
+      setPreviewBusy(false)
+    }
+  }
+
+  // 把预览中的备份记录按 id 合并回灌到应用（不覆盖已有记录）
+  const importPreview = async () => {
+    if (!preview) return
+    try {
+      const { added, skipped } = await importHistoryItems(preview.items)
+      await refresh()
+      showToast('success', `导入 ${added} 条${skipped > 0 ? `，跳过 ${skipped} 条` : ''}`)
+    } catch (e) {
+      showToast('error', `导入失败：${(e as Error).message}`)
     }
   }
 
@@ -353,6 +429,90 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
             本地备份服务未连接（需以 npm run dev 启动应用）。「导出全部」将退回浏览器下载，
             可手动放入备份仓库 data/ 目录后点「推送」。
           </p>
+        )}
+        {backupStatus?.connected && (
+          <div className="border-t border-zinc-100 pt-2 dark:border-zinc-800">
+            <button
+              className="flex items-center gap-1 text-xs font-medium text-zinc-600 dark:text-zinc-300"
+              onClick={() => setVersionsOpen((v) => !v)}
+            >
+              {versionsOpen ? (
+                <ChevronDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" />
+              )}
+              备份历史（{backupVersions.length}）
+            </button>
+            {versionsOpen && (
+              <div className="mt-1.5 flex flex-col gap-0.5">
+                {backupVersions.length === 0 ? (
+                  <p className="px-2 py-1 text-xs text-zinc-400">暂无备份版本</p>
+                ) : (
+                  backupVersions.map((v) => (
+                    <div
+                      key={v.hash}
+                      className="flex items-center gap-2 rounded-lg px-2 py-1 text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800/60"
+                      title={v.message}
+                    >
+                      <span className="shrink-0 font-mono text-zinc-400">{v.hash.slice(0, 7)}</span>
+                      <span className="min-w-0 flex-1 truncate text-zinc-500 dark:text-zinc-400">
+                        {formatDate(new Date(v.date).getTime())}
+                      </span>
+                      <button
+                        className="btn-secondary !px-2 !py-0.5 !text-[11px]"
+                        disabled={previewBusy}
+                        onClick={() => void openPreview(v)}
+                      >
+                        预览
+                      </button>
+                      <button
+                        className="btn-secondary !px-2 !py-0.5 !text-[11px]"
+                        disabled={previewBusy}
+                        onClick={() => void downloadVersion(v)}
+                      >
+                        下载
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {preview && (
+          <div className="rounded-xl border border-zinc-200 dark:border-zinc-700">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-3 pt-2.5">
+              <p className="text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                版本预览 {preview.version.hash.slice(0, 7)} · {preview.items.length} 条记录
+              </p>
+              <div className="flex items-center gap-1.5">
+                <button className="btn-secondary !px-2 !py-0.5 !text-[11px]" onClick={() => void importPreview()}>
+                  导入此版本
+                </button>
+                <button className="btn-secondary !px-2 !py-0.5 !text-[11px]" onClick={() => setPreview(null)}>
+                  关闭
+                </button>
+              </div>
+            </div>
+            <div className="max-h-72 overflow-y-auto px-3 pb-3 pt-2">
+              {preview.items.length === 0 ? (
+                <p className="text-xs text-zinc-400">此版本没有记录</p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {preview.items.map((it) => (
+                    <div key={it.id} className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/60">
+                      <p className="text-[11px] text-zinc-400">
+                        {formatDate(it.createdAt)} · {it.source === 'live' ? '实时转录' : '文件转写'} · {it.engine}
+                        {it.durationSec > 0 && ` · ${formatDuration(it.durationSec)}`}
+                      </p>
+                      <p className="mt-1 whitespace-pre-wrap break-all text-sm leading-6">{it.text || '（空）'}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         )}
       </div>
 
