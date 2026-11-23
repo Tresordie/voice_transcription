@@ -8,6 +8,8 @@ export interface TimelineEntry {
   title: string
   desc: string
   status: string
+  /** 直接指定的节点色（列表路径由 emoji 语义给出；表格路径由文本启发式判定，缺省时渲染器兜底） */
+  color?: string
 }
 
 export interface TimelineData {
@@ -109,7 +111,7 @@ function taskStatus(text: string): { color: string; icon: string; done: boolean 
 function eventTimelineHtml(data: TimelineData): string {
   const items = data.entries
     .map((e) => {
-      const color = phaseColor(`${e.time} ${e.title} ${e.status}`)
+      const color = e.color ?? phaseColor(`${e.time} ${e.title} ${e.status}`)
       return `<div style="position:relative;margin-bottom:16px;padding-left:4px;">
   <span style="position:absolute;left:-24px;top:6px;width:11px;height:11px;border-radius:50%;background:${color};border:2px solid #ffffff;box-shadow:0 0 0 1px #d1d5db;"></span>
   ${e.time ? `<span style="display:inline-block;background:#eff6ff;color:#0b6bcb;border-radius:999px;padding:1px 10px;font-size:12px;font-weight:600;">${esc(e.time)}</span>` : ''}
@@ -139,7 +141,7 @@ function taskTimelineHtml(data: TimelineData): string {
           ? 'font-weight:700;color:#b42318;'
           : 'font-weight:700;color:#111827;'
       return `<div style="position:relative;margin-bottom:14px;">
-  <span style="position:absolute;left:-24px;top:2px;width:14px;height:14px;border-radius:50%;background:#ffffff;border:3px solid ${st.color};"></span>
+  <span style="position:absolute;left:-24px;top:2px;width:14px;height:14px;border-radius:50%;background:#ffffff;border:3px solid ${e.color ?? st.color};"></span>
   <div style="${titleStyle}">${st.icon} ${esc(e.title)}${e.status ? ` <span style="display:inline-block;border-radius:999px;padding:0 8px;font-size:11px;font-weight:600;background:${st.color};color:#ffffff;">${esc(e.status)}</span>` : ''}</div>
   ${e.time ? `<div style="color:#6b7280;font-size:12px;margin-top:1px;">⏱ ${esc(e.time)}${overdue ? ' · <span style="color:#b42318;font-weight:600;">已逾期</span>' : ''}</div>` : ''}
   ${e.desc ? `<div style="color:#6b7280;font-size:13px;margin-top:2px;">${esc(e.desc)}</div>` : ''}
@@ -156,6 +158,124 @@ function taskTimelineHtml(data: TimelineData): string {
 
 export function renderTimelineHtml(data: TimelineData): string {
   return data.style === 'task' ? taskTimelineHtml(data) : eventTimelineHtml(data)
+}
+
+// ---------- 列表时间轴识别（G-SPEC 的「彩点 emoji + 日期」markdown 列表） ----------
+
+/** 阶段彩点 emoji → 语义色（G-SPEC：蓝=推进 / 棕=停滞 / 红=升级；兼容方块/对错变体） */
+const EMOJI_COLORS: Record<string, string> = {
+  '🔵': '#0b6bcb', '🟦': '#0b6bcb',
+  '🟤': '#9a6700', '🟫': '#9a6700',
+  '🔴': '#b42318', '🟥': '#b42318', '❌': '#b42318',
+  '🟢': '#1a7f37', '🟩': '#1a7f37', '✅': '#1a7f37',
+  '🟡': '#9a6700', '🟨': '#9a6700', '🟧': '#9a6700',
+  '⚪': '#6b7280', '⬜': '#6b7280', '⚫': '#6b7280', '📦': '#6b7280',
+}
+
+/** 任务类 emoji（条目里占多数时按任务时间轴渲染） */
+const TASK_EMOJIS = new Set(['✅', '❌', '🚧', '📦', '🔄'])
+
+const LEAD_EMOJI_RE =
+  /^(🔵|🟦|🟤|🟫|🔴|🟥|🟢|🟩|🟡|🟨|🟧|⚪\uFE0F?|⬜\uFE0F?|⚫|✅|❌|🚧|📦|🔄)\s*/u
+
+/** 行首日期/时间戳：mm/dd、yyyy-mm-dd、mm月dd日（可带 hh:mm）或 mm:ss，后接空白/标点才算 */
+const LEAD_TIME_RE =
+  /^((?:\d{4}[年/-])?\d{1,2}[./月-]\d{1,2}日?(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?|\d{1,2}:\d{2}(?::\d{2})?)(?=\s|$|[:：、，,—·])/
+
+/** 去掉行首彩点 emoji 与时间戳（strong 片段与正文共用同一口径） */
+function stripLeadTime(s: string): string {
+  return s.replace(LEAD_EMOJI_RE, '').replace(LEAD_TIME_RE, '').trim()
+}
+
+function parseListItem(text: string, strong?: string): ParsedListItem | null {
+  let t = text.trim()
+  if (!t) return null
+  let color: string | undefined
+  let task = false
+  const em = LEAD_EMOJI_RE.exec(t)
+  if (em) {
+    const emoji = em[1].replace(/\uFE0F$/, '')
+    color = EMOJI_COLORS[emoji]
+    task = TASK_EMOJIS.has(emoji)
+    t = t.slice(em[0].length).trim()
+  }
+  const tm = LEAD_TIME_RE.exec(t)
+  let time = ''
+  if (tm) {
+    time = tm[1].trim()
+    t = t.slice(tm[0].length).trim()
+  }
+  if (!em && !tm) return null
+
+  let title: string
+  let desc: string
+  const st = (strong ?? '').trim()
+  if (st) {
+    title = stripLeadTime(st)
+    if (!title) {
+      // strong 只包了时间戳：标题退化为正文首段
+      const idx = t.search(/\u3000|\s{2,}/)
+      title = idx > 0 ? t.slice(0, idx).trim() : t
+      desc = idx > 0 ? t.slice(idx).trim() : ''
+    } else if (t.startsWith(title)) {
+      desc = t.slice(title.length).trim()
+    } else if (t.includes(title)) {
+      desc = t.replace(title, ' ').trim()
+    } else {
+      desc = t
+    }
+  } else {
+    // 无加粗：以全角空格/连续空格为标题、描述分界
+    const idx = t.search(/\u3000|\s{2,}/)
+    title = idx > 0 ? t.slice(0, idx).trim() : t
+    desc = idx > 0 ? t.slice(idx).trim() : ''
+  }
+  return { time, title: title || t.slice(0, 40), desc, color, task }
+}
+
+interface ParsedListItem {
+  time: string
+  title: string
+  desc: string
+  color?: string
+  task: boolean
+}
+
+/**
+ * 列表条目 → 时间轴数据：条目以彩点 emoji 或日期开头即视为时间轴
+ * （≥2 条，且 ≥60% 命中彩点/日期、≥50% 有时间，防普通列表误伤）。
+ */
+export function parseTimelineListItems(
+  items: { text: string; strong?: string }[],
+): TimelineData | null {
+  if (items.length < 2) return null
+  const parsed = items.map((it) => parseListItem(it.text, it.strong))
+  const hits = parsed.filter(Boolean).length
+  const withTime = parsed.filter((p) => p?.time).length
+  if (hits < Math.max(2, Math.ceil(items.length * 0.6))) return null
+  if (withTime < Math.max(2, Math.ceil(items.length * 0.5))) return null
+
+  const entries: TimelineEntry[] = []
+  let taskVotes = 0
+  let eventVotes = 0
+  parsed.forEach((p, i) => {
+    if (!p) {
+      // 未命中条目保序保留，避免升级后丢内容
+      const t = items[i].text.trim()
+      entries.push({
+        time: '',
+        title: t.slice(0, 60) || '（无标题）',
+        desc: t.length > 60 ? t.slice(60).trim() : '',
+        status: '',
+      })
+      return
+    }
+    if (p.task) taskVotes++
+    else if (p.color) eventVotes++
+    entries.push({ time: p.time, title: p.title, desc: p.desc, status: '', color: p.color })
+  })
+  if (entries.length < 2) return null
+  return { entries: entries.slice(0, 40), style: taskVotes > eventVotes ? 'task' : 'event' }
 }
 
 // ---------- SVG 生成（PPT 插图用：svgTextToPng 转 PNG） ----------

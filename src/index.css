@@ -178,6 +178,11 @@ body {
   height: auto;
   display: block;
 }
+/* 宽图保持固有尺寸由容器横向滚动，等比缩放会让文字小到无法辨认 */
+.md-figure svg.md-fig-wide {
+  width: auto;
+  max-width: none;
+}
 .md-figure-error {
   @apply my-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300;
 }

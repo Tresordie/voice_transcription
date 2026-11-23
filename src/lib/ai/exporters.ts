@@ -3,8 +3,8 @@
 // html/pdf/doc 共用 richRender 富渲染管线（svg/mermaid 代码块 → 图形），与页面预览所见即所得
 import { downloadText, timestampName } from '../utils'
 import { markdownToWeChat } from './wechat'
-import { renderRichMarkdown, renderMermaidToSvg, sanitizeSvgString, detectFigure } from './richRender'
-import { detectTimeline, timelineEntriesToSvg } from './timeline'
+import { renderRichMarkdown, renderMermaidToSvg, sanitizeSvgString, detectFigure, fitSvgText } from './richRender'
+import { detectTimeline, timelineEntriesToSvg, parseTimelineListItems, renderTimelineHtml } from './timeline'
 
 export type ExportFormat = 'md' | 'html' | 'pdf' | 'doc' | 'xlsx' | 'pptx'
 
@@ -23,8 +23,9 @@ async function renderHtmlBody(markdown: string): Promise<string> {
 
 const DOC_CSS_RULES = `
   #ai-export-root img { max-width: 100%; }
-  #ai-export-root .md-figure { margin: 1.2em 0; }
+  #ai-export-root .md-figure { margin: 1.2em 0; overflow-x: auto; }
   #ai-export-root .md-figure svg { max-width: 100%; height: auto; }
+  #ai-export-root .md-figure svg.md-fig-wide { width: auto; max-width: none; }
   #ai-export-root h1 { font-size: 1.7em; border-bottom: 3px solid #6366f1; padding-bottom: 10px; margin: 1.2em 0 0.8em; }
   #ai-export-root h2 { font-size: 1.3em; border-left: 4px solid #6366f1; padding-left: 10px; margin: 1.4em 0 0.6em; }
   #ai-export-root h3 { font-size: 1.1em; margin: 1.1em 0 0.5em; color: #4338ca; }
@@ -44,6 +45,13 @@ const DOC_CSS = `
   body { font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; color: #1f2937;
          line-height: 1.75; max-width: 760px; margin: 0 auto; padding: 32px 24px; }
   ${DOC_CSS_RULES.replaceAll('#ai-export-root', 'body')}
+`
+// PDF 打印兜底：纸张无法滚动，宽图退回等比缩放（完整优先于清晰）
+const PRINT_CSS = `
+  @media print {
+    body { padding: 0; }
+    body .md-figure svg.md-fig-wide { width: auto !important; max-width: 100% !important; }
+  }
 `
 
 /** Word 可打印区域宽度（A4 - 默认页边距，96dpi 像素） */
@@ -79,7 +87,7 @@ function wrapHtmlDocument(bodyHtml: string, title: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
-<style>${DOC_CSS} @media print { body { padding: 0; } }</style>
+<style>${DOC_CSS} ${PRINT_CSS}</style>
 </head>
 <body>${bodyHtml}</body>
 </html>`
@@ -97,9 +105,13 @@ function saveBlob(blob: Blob, filename: string): void {
 // ---------- 各格式导出 ----------
 
 /**
- * markdown 中的 svg/mermaid 代码块 → 内联 SVG 图形（其余 markdown 原样保留）。
- * 导出的 .md 在 Typora / VS Code / Obsidian 等支持内联 HTML 的查看器中
- * 可直接显示图形，无需 mermaid 支持；不受支持的查看器中 SVG 以源码保留。
+ * markdown 中的 svg/mermaid 代码块与裸 <svg> HTML 块 → PNG data URI 内嵌图；
+ * 时间轴列表（彩点 emoji + 日期开头）→ 时间轴卡片 HTML。
+ *
+ * 图形不保留内联 SVG 的原因（用户实测）：Typora 等查看器会剥离 SVG 内嵌 <style>
+ * （rect 默认 fill=黑 → 全部黑块），foreignObject 里的文字也不渲染；PNG data URI
+ * 在 Typora / VS Code / Obsidian / GitHub 等所有主流查看器中显示一致。
+ * 转换失败时回落内联 SVG / 保留源码。其余 markdown 原样保留。
  */
 export async function upgradeMarkdownFigures(markdown: string): Promise<string> {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n')
@@ -107,15 +119,59 @@ export async function upgradeMarkdownFigures(markdown: string): Promise<string> 
   let inFence = false
   let lang = ''
   let buf: string[] = []
+  // 裸 <svg> HTML 块收集（模型常把封面/示意图直接写成 HTML 块而非围栏）
+  let inSvg = false
+  let svgLines: string[] = []
+  // 时间轴列表行收集（连续的 -/*/# 列表行）
+  let listLines: string[] | null = null
+
+  /** SVG 代码 → PNG data URI（先做文本溢出修复再光栅化），失败返回 null */
+  const svgToPng = async (code: string): Promise<string | null> => {
+    try {
+      const fitted = fitSvgText(code.trim())
+      if (!fitted.includes('<svg')) return null
+      return (await svgTextToPng(fitted))?.data ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /** 时间轴列表行 flush：命中则输出时间轴卡片 HTML，否则原样回放 */
+  const flushList = (): void => {
+    if (!listLines) return
+    const src = listLines
+    listLines = null
+    if (src.length >= 2) {
+      const items = src.map((l) => {
+        const raw = l.replace(/^\s*(?:[-*+•▸►]|\d+[.)])\s+/, '')
+        const strong = /\*\*([^*]+)\*\*/.exec(raw)?.[1]
+        const text = raw
+          .replace(/\*\*([^*]+)\*\*/g, '$1')
+          .replace(/`([^`]+)`/g, '$1')
+          .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+          .trim()
+        return { text, strong }
+      })
+      const data = parseTimelineListItems(items)
+      if (data) {
+        out.push('', renderTimelineHtml(data), '')
+        return
+      }
+    }
+    out.push(...src)
+  }
+
   const flush = async (): Promise<void> => {
     const code = buf.join('\n')
     const kind = detectFigure(lang, code)
     if (kind === 'svg') {
-      out.push(sanitizeSvgString(code.trim()), '')
+      const png = await svgToPng(code)
+      out.push(png ? `![图形](${png})` : sanitizeSvgString(code.trim()), '')
     } else if (kind === 'mermaid') {
       try {
-        const svg = sanitizeSvgString(await renderMermaidToSvg(code, false))
-        out.push(svg, '')
+        const svg = await renderMermaidToSvg(code, false)
+        const png = await svgTextToPng(svg)
+        out.push(png ? `![图形](${png.data})` : sanitizeSvgString(svg), '')
       } catch {
         out.push('```mermaid', code, '```', '')
       }
@@ -128,23 +184,64 @@ export async function upgradeMarkdownFigures(markdown: string): Promise<string> 
   }
   for (const line of lines) {
     const t = line.trim()
-    if (!inFence && t.startsWith('```')) {
+    if (!inFence && !inSvg && t.startsWith('```')) {
+      flushList()
       lang = t.slice(3).trim().toLowerCase()
       inFence = true
       buf = []
       continue
     }
-    if (inFence && t.startsWith('```') && t.length <= 3 + lang.length) {
-      await flush()
-      continue
-    }
     if (inFence) {
+      if (t.startsWith('```') && t.length <= 3 + lang.length) {
+        await flush()
+        continue
+      }
       buf.push(line)
       continue
+    }
+    if (!inSvg && /^\s*<svg[\s>]/i.test(line)) {
+      flushList()
+      if (/<\/svg\s*>/i.test(line)) {
+        // 单行 svg
+        const png = await svgToPng(line)
+        out.push(png ? `![图形](${png})` : line, '')
+        continue
+      }
+      inSvg = true
+      svgLines = [line]
+      continue
+    }
+    if (inSvg) {
+      svgLines.push(line)
+      if (/<\/svg\s*>/i.test(line)) {
+        const code = svgLines.join('\n')
+        const src = svgLines
+        svgLines = []
+        inSvg = false
+        const png = await svgToPng(code)
+        if (png) out.push(`![图形](${png})`, '')
+        else out.push('', ...src, '')
+      }
+      continue
+    }
+    // 时间轴列表行收集：列表标记行入队，缩进续行并入上一条，其余行先 flush 列表
+    if (/^\s*(?:[-*+•▸►]|\d+[.)])\s+\S/.test(line)) {
+      if (!listLines) listLines = []
+      listLines.push(line)
+      continue
+    }
+    if (listLines) {
+      if (line.trim() && /^\s+\S/.test(line)) {
+        listLines[listLines.length - 1] += ' ' + line.trim()
+        continue
+      }
+      flushList()
     }
     out.push(line)
   }
   if (inFence) await flush() // 未闭合围栏兜底
+  if (inSvg) out.push('', ...svgLines, '') // 未闭合 svg 兜底：原样回放
+  flushList()
   return out.join('\n')
 }
 
@@ -197,6 +294,7 @@ async function exportDoc(input: ExportInput): Promise<void> {
   await replaceFiguresWithPng(parsed.body)
   // PNG 转换失败的兜底：内联 SVG 显式缩放到可打印宽度（Word 不理会 max-width 样式）
   parsed.body.querySelectorAll('.md-figure svg').forEach((svg) => {
+    svg.classList.remove('md-fig-wide')
     const vb = (svg.getAttribute('viewBox') ?? '')
       .split(/[\s,]+/)
       .map(Number)
@@ -326,13 +424,33 @@ function firstFigureCode(lines: string[]): { kind: 'svg' | 'mermaid'; code: stri
   return null
 }
 
+/** SVG 尺寸归一：mermaid 输出 width="100%"（img 加载无绝对尺寸，naturalWidth 不可靠），
+ *  依 viewBox 换算为像素宽高，光栅化分辨率才与文字实际大小一致 */
+function normalizeSvgSize(svgText: string): string {
+  const holder = document.createElement('div')
+  holder.innerHTML = svgText
+  const svg = holder.querySelector('svg')
+  if (!svg) return svgText
+  const wRaw = svg.getAttribute('width') ?? ''
+  const vb = (svg.getAttribute('viewBox') ?? '')
+    .split(/[\s,]+/)
+    .map(Number)
+  if ((!wRaw || wRaw.includes('%')) && vb.length === 4 && vb.every((n) => Number.isFinite(n))) {
+    svg.setAttribute('width', String(vb[2]))
+    svg.setAttribute('height', String(vb[3]))
+    svg.style.maxWidth = 'none'
+    return new XMLSerializer().serializeToString(svg)
+  }
+  return svgText
+}
+
 /** SVG 文本 → PNG dataURL（mermaid 先经 richRender 渲染为 SVG），失败返回 null。
  *  必须用 data: URL 加载——blob: URL 加载 SVG 会污染 canvas，toDataURL 直接抛错 */
 async function svgTextToPng(
   svgText: string,
 ): Promise<{ data: string; ratio: number } | null> {
   try {
-    const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgText)
+    const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(normalizeSvgSize(svgText))
     const img = await new Promise<HTMLImageElement>((res, rej) => {
       const im = new Image()
       im.onload = () => res(im)
@@ -340,7 +458,9 @@ async function svgTextToPng(
       im.src = url
     })
     const ratio = img.width && img.height ? img.height / img.width : 0.42
-    const width = 1400
+    // 分辨率跟随图形固有尺寸（上限 3200）：超宽甘特/流程图按原尺寸光栅化，
+    // 固定 1400 会把宽图文字等比缩小到不可辨认
+    const width = Math.min(3200, Math.max(1400, Math.round(img.width) || 1400))
     const canvas = document.createElement('canvas')
     canvas.width = width
     canvas.height = Math.round(width * ratio)
@@ -391,8 +511,9 @@ async function exportPptx(input: ExportInput): Promise<void> {
     const figCode = firstFigureCode(b.lines)
     if (figCode) {
       try {
+        // 模型手写 SVG 先做文本溢出修复（超宽行缩字号/textLength 压缩）
         const svg =
-          figCode.kind === 'svg' ? figCode.code : await renderMermaidToSvg(figCode.code, false)
+          figCode.kind === 'svg' ? fitSvgText(figCode.code) : await renderMermaidToSvg(figCode.code, false)
         fig = await svgTextToPng(svg)
       } catch {
         fig = null
