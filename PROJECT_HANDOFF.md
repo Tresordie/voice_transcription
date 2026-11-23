@@ -25,6 +25,7 @@
 - 音频链路：getUserMedia → AudioWorklet（16kHz PCM16 + RMS 电平）→ 流式识别 / WAV 分段
 - 存储：localStorage（设置）· IndexedDB（历史）· Cache API（模型缓存）
 - 历史备份：历史页支持全量导出/导入 JSON（含全部元数据，按 id 合并去重）；dev 服务器内置 `/backup-api` 备份服务（vite.config.ts backupPlugin）——「备份并推送」直接写入 voice_transcription_database 仓库 data/history.json 并自动 commit + push 双远端，页面状态区显示仓库路径/最近提交/推送结果；**定时自动备份**：应用运行期间按间隔自动推送（默认 5 分钟，面板下拉 1/5/15/30 分钟或关闭，存 localStorage `vt:backupInterval`，启动后先检查一次可重试失败推送；内容无变化且上次成功则跳过），仓库路径可用环境变量 `BACKUP_REPO_PATH` 覆盖，接口不可用时自动退回浏览器下载；**备份历史**：面板可展开 git 备份版本列表（最近 50 条，`/versions`），每个版本支持预览记录（`/version?hash=`）、下载 JSON、导入此版本回灌应用
+- 页面记录：实时转录/文件转写页底部各自展示本页历史（PageRecordsSection 按 source 过滤，无记录时隐藏），行内点击展开全文预览、「载入」回填到页面结果区（有内容先 confirm 替换；录音/转写进行中禁止载入）、「下载」导出 TXT；记录增删改通过 history.ts 的 `vt-history-changed` 窗口事件驱动各视图（页面记录区/历史页）自动刷新
 
 ## 3. 目录与关键文件职责
 

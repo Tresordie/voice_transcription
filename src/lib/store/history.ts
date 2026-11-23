@@ -11,6 +11,12 @@ export interface HistoryItem {
 
 const DB_NAME = 'vt-db'
 const STORE = 'history'
+/** 历史记录变更事件：任何视图（历史页/页面记录区）监听后自动刷新 */
+export const HISTORY_CHANGED_EVENT = 'vt-history-changed'
+
+function notifyChanged(): void {
+  window.dispatchEvent(new Event(HISTORY_CHANGED_EVENT))
+}
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -54,14 +60,17 @@ export async function listHistory(): Promise<HistoryItem[]> {
 
 export async function addHistoryItem(item: HistoryItem): Promise<void> {
   await runTx('readwrite', (s) => s.put(item))
+  notifyChanged()
 }
 
 export async function deleteHistoryItem(id: string): Promise<void> {
   await runTx('readwrite', (s) => s.delete(id))
+  notifyChanged()
 }
 
 export async function clearHistory(): Promise<void> {
   await runTx('readwrite', (s) => s.clear())
+  notifyChanged()
 }
 
 /** 校验单条导入数据，非法返回 null */
@@ -108,7 +117,10 @@ export async function importHistoryItems(
           added++
         }
       }
-      t.oncomplete = () => resolve({ added, skipped: invalid + valid.length - added })
+      t.oncomplete = () => {
+        resolve({ added, skipped: invalid + valid.length - added })
+        notifyChanged()
+      }
       t.onerror = () => reject(t.error)
     })
   } finally {

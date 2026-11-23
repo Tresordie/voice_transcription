@@ -21,8 +21,9 @@ import {
 import { offlineModelCached, transcribePcmOffline, useOfflineEngineVersion } from '../lib/asr/offline'
 import { transcribeFile, type OnlineConfig } from '../lib/asr/online'
 import { useSettings } from '../lib/store/settings'
-import { addHistoryItem, newId } from '../lib/store/history'
+import { addHistoryItem, newId, type HistoryItem } from '../lib/store/history'
 import { useToast } from '../components/toast'
+import PageRecordsSection from '../components/pageRecords'
 import {
   copyText,
   downloadText,
@@ -152,6 +153,17 @@ export default function FilePage() {
       text: result,
     })
     toast.show('success', '已存入历史记录')
+  }
+
+  // 从页面记录区载入一条历史到当前转写结果（有内容先确认替换）
+  const loadFromHistory = (item: HistoryItem) => {
+    if (working) {
+      toast.show('error', '请等待当前转写完成再载入')
+      return
+    }
+    if (result.trim() && !window.confirm('载入这条记录会替换当前转写结果，确定继续吗？')) return
+    setResult(item.text)
+    toast.show('success', '已载入历史记录')
   }
 
   return (
@@ -318,6 +330,9 @@ export default function FilePage() {
         当前引擎：{isLocal ? '本地模型（离线可用）' : `在线 API · ${settings.model}`}
         {isLocal && localEngineState.status === 'no-model' && '（首次使用需下载模型，约 190MB）'}
       </p>
+
+      {/* 页面记录：本页历史，点击行预览全文，可载入 / 下载 */}
+      <PageRecordsSection source="file" onLoad={loadFromHistory} filePrefix="转写" />
     </div>
   )
 }

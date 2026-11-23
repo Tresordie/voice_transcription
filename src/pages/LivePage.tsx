@@ -19,9 +19,10 @@ import {
 } from '../lib/asr/local'
 import { joinParts, transcribeBlob, type OnlineConfig } from '../lib/asr/online'
 import { useSettings } from '../lib/store/settings'
-import { addHistoryItem, newId } from '../lib/store/history'
+import { addHistoryItem, newId, type HistoryItem } from '../lib/store/history'
 import { useToast } from '../components/toast'
 import { Waveform } from '../components/Waveform'
+import PageRecordsSection from '../components/pageRecords'
 import {
   copyText,
   downloadText,
@@ -203,6 +204,19 @@ export default function LivePage({ active = true }: { active?: boolean }) {
     toast.show('success', '已存入历史记录')
   }
 
+  // 从页面记录区载入一条历史到当前转录结果（有内容先确认替换）
+  const loadFromHistory = (item: HistoryItem) => {
+    if (phase === 'recording') {
+      toast.show('error', '请先停止录音再载入')
+      return
+    }
+    if (fullText.trim() && !window.confirm('载入这条记录会替换当前转录内容，确定继续吗？')) return
+    finalsRef.current = [item.text]
+    setFinals([item.text])
+    setPartial('')
+    toast.show('success', '已载入历史记录')
+  }
+
   const copyAll = async () => {
     if (await copyText(fullText)) toast.show('success', '已复制到剪贴板')
     else toast.show('error', '复制失败，请手动选择文本复制')
@@ -351,6 +365,9 @@ export default function LivePage({ active = true }: { active?: boolean }) {
           </button>
         </div>
       )}
+
+      {/* 页面记录：本页历史，点击行预览全文，可载入 / 下载 */}
+      <PageRecordsSection source="live" onLoad={loadFromHistory} filePrefix="转录" />
     </div>
   )
 }
