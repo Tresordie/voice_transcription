@@ -1,25 +1,20 @@
-// 历史记录页：转录结果列表、查看、复制、删除、全量导出/导入
+// 历史记录页：git 备份管理——全量导出/导入 JSON、定时自动推送、备份版本浏览/预览/恢复
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  AudioLines,
   ChevronDown,
   ChevronRight,
-  Copy,
   Download,
-  FileAudio2,
-  History,
   Trash2,
   Upload,
 } from 'lucide-react'
 import {
   clearHistory,
-  deleteHistoryItem,
   importHistoryItems,
   listHistory,
   type HistoryItem,
 } from '../lib/store/history'
 import { useToast } from '../components/toast'
-import { copyText, downloadText, formatDate, formatDuration, timestampName } from '../lib/utils'
+import { downloadText, formatDate, formatDuration, timestampName } from '../lib/utils'
 
 // —— git 备份服务（vite dev 内置 /backup-api）相关类型 ——
 interface BackupPushed {
@@ -59,6 +54,13 @@ interface BackupVersionContentResult {
 const remoteName = (url: string) =>
   url.includes('github') ? 'GitHub' : url.includes('gitee') ? 'Gitee' : url
 
+// 记录来源展示名（备份版本预览用）
+const SOURCE_LABEL: Record<HistoryItem['source'], string> = {
+  live: '实时转录',
+  file: '文件转写',
+  ai: 'AI 总结',
+}
+
 // 自动备份间隔（分钟），存 localStorage；0 = 关闭
 const BACKUP_INTERVAL_KEY = 'vt:backupInterval'
 const BACKUP_INTERVAL_OPTIONS = [1, 5, 15, 30]
@@ -67,8 +69,6 @@ const BACKUP_INTERVAL_DEFAULT = 5
 export default function HistoryPage({ active = true }: { active?: boolean }) {
   const { show: showToast } = useToast()
   const [items, setItems] = useState<HistoryItem[]>([])
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [loading, setLoading] = useState(true)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null)
   const [backupResult, setBackupResult] = useState<BackupOpResult | null>(null)
@@ -86,12 +86,7 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
   const lastTickOkRef = useRef<boolean | null>(null)
 
   const refresh = useCallback(async () => {
-    setLoading(true)
-    try {
-      setItems(await listHistory())
-    } finally {
-      setLoading(false)
-    }
+    setItems(await listHistory())
   }, [])
 
   // 备份服务状态（仅本机 dev 服务器提供；接口不存在时保持未连接态）
@@ -106,7 +101,8 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
     try {
       const r = await fetch('/backup-api/versions')
       const data: BackupVersionsResult = await r.json()
-      setBackupVersions(r.ok && data.ok ? data.versions ?? [] : [])
+      // 接口返回最近 50 条，界面仅展示最近 5 条
+      setBackupVersions(r.ok && data.ok ? data.versions?.slice(0, 5) ?? [] : [])
     } catch {
       setBackupVersions([])
     }
@@ -117,25 +113,10 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
     void loadBackupStatus()
   }, [loadBackupStatus])
 
-  // 页面保持挂载：每次切回本页时刷新列表（捕获其他页面新存入的记录）
+  // 页面保持挂载：每次切回本页时刷新列表（备份内容以最新记录为准）
   useEffect(() => {
     if (active) void refresh()
   }, [active, refresh])
-
-  const toggle = (id: string) => {
-    setExpanded((s) => {
-      const next = new Set(s)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  const remove = async (id: string) => {
-    await deleteHistoryItem(id)
-    setItems((xs) => xs.filter((x) => x.id !== id))
-    showToast('info', '已删除')
-  }
 
   const removeAll = async () => {
     if (items.length === 0) return
@@ -342,7 +323,7 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">历史记录</h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            保存的转录结果仅存于你的浏览器中，支持导出 JSON 备份与导入恢复
+            本地记录仅存于你的浏览器中，支持 JSON 备份与导入恢复；各页历史在对应功能页底部查看
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -503,7 +484,7 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
                   {preview.items.map((it) => (
                     <div key={it.id} className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/60">
                       <p className="text-[11px] text-zinc-400">
-                        {formatDate(it.createdAt)} · {it.source === 'live' ? '实时转录' : '文件转写'} · {it.engine}
+                        {formatDate(it.createdAt)} · {SOURCE_LABEL[it.source]} · {it.engine}
                         {it.durationSec > 0 && ` · ${formatDuration(it.durationSec)}`}
                       </p>
                       <p className="mt-1 whitespace-pre-wrap break-all text-sm leading-6">{it.text || '（空）'}</p>
@@ -515,93 +496,6 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
           </div>
         )}
       </div>
-
-      {loading ? (
-        <p className="py-10 text-center text-sm text-zinc-400">加载中…</p>
-      ) : items.length === 0 ? (
-        <div className="card flex flex-col items-center gap-3 px-6 py-16 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-zinc-100 dark:bg-zinc-800">
-            <History className="h-6 w-6 text-zinc-400" />
-          </div>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            还没有历史记录
-          </p>
-          <p className="text-xs text-zinc-400">
-            在「实时转录」或「文件转写」页完成后点击「存入历史」
-          </p>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {items.map((item) => {
-            const open = expanded.has(item.id)
-            return (
-              <div key={item.id} className="card overflow-hidden">
-                <button
-                  className="flex w-full items-center gap-3 p-4 text-left"
-                  onClick={() => toggle(item.id)}
-                >
-                  {open ? (
-                    <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />
-                  )}
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-50 dark:bg-indigo-950/60">
-                    {item.source === 'live' ? (
-                      <AudioLines className="h-4.5 w-4.5 text-indigo-500" />
-                    ) : (
-                      <FileAudio2 className="h-4.5 w-4.5 text-indigo-500" />
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">
-                      {item.text.slice(0, 60) || '（空）'}
-                    </p>
-                    <p className="mt-0.5 text-xs text-zinc-400">
-                      {item.source === 'live' ? '实时转录' : '文件转写'}
-                      {' · '}
-                      {item.engine}
-                      {item.durationSec > 0 && ` · ${formatDuration(item.durationSec)}`}
-                      {' · '}
-                      {formatDate(item.createdAt)}
-                    </p>
-                  </div>
-                </button>
-                {open && (
-                  <div className="border-t border-zinc-100 px-4 pb-4 pt-3 dark:border-zinc-800">
-                    <div className="max-h-64 overflow-y-auto whitespace-pre-wrap break-all text-sm leading-6">
-                      {item.text}
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button
-                        className="btn-secondary !px-3 !py-1.5 text-xs"
-                        onClick={async () => {
-                          if (await copyText(item.text)) showToast('success', '已复制')
-                        }}
-                      >
-                        <Copy className="h-3.5 w-3.5" /> 复制
-                      </button>
-                      <button
-                        className="btn-secondary !px-3 !py-1.5 text-xs"
-                        onClick={() =>
-                          downloadText(item.text, timestampName('转录', 'txt'))
-                        }
-                      >
-                        <Download className="h-3.5 w-3.5" /> 导出
-                      </button>
-                      <button
-                        className="btn-danger !px-3 !py-1.5 text-xs"
-                        onClick={() => remove(item.id)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" /> 删除
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
     </div>
   )
 }

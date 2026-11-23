@@ -26,7 +26,8 @@ import { extractFromFile, MAX_FILE_BYTES } from '../lib/ai/extract'
 import { SCENARIOS, TEMPLATES, type SummaryTemplate } from '../lib/ai/templates'
 import { exportSummary, markdownToWeChat, type ExportFormat } from '../lib/ai/exporters'
 import { copyText, formatBytes } from '../lib/utils'
-import { listHistory, type HistoryItem } from '../lib/store/history'
+import { addHistoryItem, listHistory, newId, type HistoryItem } from '../lib/store/history'
+import PageRecordsSection from '../components/pageRecords'
 
 interface Attachment {
   id: string
@@ -130,7 +131,7 @@ export default function AiPage() {
       return
     }
     try {
-      const items = await listHistory()
+      const items = (await listHistory()).filter((x) => x.source !== 'ai')
       setHistoryItems(items.slice(0, 30))
     } catch {
       toast.show('error', '历史记录读取失败')
@@ -180,7 +181,16 @@ export default function AiPage() {
         },
       })
       setResult(full)
-      toast.show('success', '总结完成')
+      // 生成完成即自动存入本页历史（参考 translate_tool：完成即记录，可在页面记录区随时载回）
+      await addHistoryItem({
+        id: newId(),
+        createdAt: Date.now(),
+        source: 'ai',
+        engine: settings.ai.model,
+        durationSec: 0,
+        text: full,
+      })
+      toast.show('success', '总结完成，已存入本页历史')
     } catch (e) {
       const err = e as Error
       if (err.name !== 'AbortError') toast.show('error', err.message)
@@ -209,6 +219,17 @@ export default function AiPage() {
   const copyWeChat = async () => {
     if (await copyText(markdownToWeChat(result))) toast.show('success', '微信格式已复制，可直接粘贴到微信')
     else toast.show('error', '复制失败')
+  }
+
+  // 从页面记录区载入一条历史到当前总结结果（有内容先确认替换）
+  const loadFromHistory = (item: HistoryItem) => {
+    if (running) {
+      toast.show('error', '请等待当前总结完成再载入')
+      return
+    }
+    if (result.trim() && !window.confirm('载入这条记录会替换当前总结结果，确定继续吗？')) return
+    setResult(item.text)
+    toast.show('success', '已载入历史记录')
   }
 
   // ---------- 渲染 ----------
@@ -487,6 +508,9 @@ export default function AiPage() {
           )}
         </section>
       )}
+
+      {/* 页面记录：本页历史，点击行预览全文，可载入 / 下载 */}
+      <PageRecordsSection source="ai" onLoad={loadFromHistory} filePrefix="AI总结" />
     </div>
   )
 }

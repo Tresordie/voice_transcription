@@ -9,7 +9,7 @@ export default function PageRecordsSection({
   onLoad,
   filePrefix,
 }: {
-  source: 'live' | 'file'
+  source: HistoryItem['source']
   /** 载入到当前页面结果区（是否需要确认替换由页面自行判断） */
   onLoad: (item: HistoryItem) => void
   /** 下载 TXT 的文件名前缀 */
@@ -41,6 +41,10 @@ export default function PageRecordsSection({
       return next
     })
   }
+
+  // AI 总结记录折叠预览时去掉 markdown 符号并压成单行，避免满屏 #/* 干扰（参考 translate_tool）；展开仍显示原文
+  const previewText = (item: HistoryItem) =>
+    source === 'ai' ? item.text.replace(/[#|>*`-]/g, '').replace(/\s+/g, ' ').trim() : item.text
 
   return (
     <div className="card p-4">
@@ -84,7 +88,7 @@ export default function PageRecordsSection({
                     open ? '' : 'line-clamp-2'
                   }`}
                 >
-                  {item.text || '（空）'}
+                  {open ? item.text : previewText(item) || '（空）'}
                 </p>
                 {!open && <p className="mt-0.5 text-[11px] text-zinc-400">点击查看全文</p>}
               </button>

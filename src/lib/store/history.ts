@@ -2,7 +2,8 @@
 export interface HistoryItem {
   id: string
   createdAt: number
-  source: 'live' | 'file'
+  /** live=实时转录 file=文件转写 ai=AI 总结 */
+  source: 'live' | 'file' | 'ai'
   /** 展示用引擎名，如 '本地模型' / '在线 · FunAudioLLM/SenseVoiceSmall' */
   engine: string
   durationSec: number
@@ -81,7 +82,7 @@ function validateItem(x: unknown): HistoryItem | null {
     typeof it.id === 'string' &&
     it.id !== '' &&
     typeof it.createdAt === 'number' &&
-    (it.source === 'live' || it.source === 'file') &&
+    (it.source === 'live' || it.source === 'file' || it.source === 'ai') &&
     typeof it.engine === 'string' &&
     typeof it.durationSec === 'number' &&
     typeof it.text === 'string'

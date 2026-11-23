@@ -24,8 +24,8 @@
 - 本地 ASR：sherpa-onnx 官方 WASM 构建（streaming zipformer 中英双语 int8）
 - 音频链路：getUserMedia → AudioWorklet（16kHz PCM16 + RMS 电平）→ 流式识别 / WAV 分段
 - 存储：localStorage（设置）· IndexedDB（历史）· Cache API（模型缓存）
-- 历史备份：历史页支持全量导出/导入 JSON（含全部元数据，按 id 合并去重）；dev 服务器内置 `/backup-api` 备份服务（vite.config.ts backupPlugin）——「备份并推送」直接写入 voice_transcription_database 仓库 data/history.json 并自动 commit + push 双远端，页面状态区显示仓库路径/最近提交/推送结果；**定时自动备份**：应用运行期间按间隔自动推送（默认 5 分钟，面板下拉 1/5/15/30 分钟或关闭，存 localStorage `vt:backupInterval`，启动后先检查一次可重试失败推送；内容无变化且上次成功则跳过），仓库路径可用环境变量 `BACKUP_REPO_PATH` 覆盖，接口不可用时自动退回浏览器下载；**备份历史**：面板可展开 git 备份版本列表（最近 50 条，`/versions`），每个版本支持预览记录（`/version?hash=`）、下载 JSON、导入此版本回灌应用
-- 页面记录：实时转录/文件转写页底部各自展示本页历史（PageRecordsSection 按 source 过滤，无记录时隐藏），行内点击展开全文预览、「载入」回填到页面结果区（有内容先 confirm 替换；录音/转写进行中禁止载入）、「下载」导出 TXT；记录增删改通过 history.ts 的 `vt-history-changed` 窗口事件驱动各视图（页面记录区/历史页）自动刷新
+- 历史备份：历史页支持全量导出/导入 JSON（含全部元数据，按 id 合并去重）；dev 服务器内置 `/backup-api` 备份服务（vite.config.ts backupPlugin）——「备份并推送」直接写入 voice_transcription_database 仓库 data/history.json 并自动 commit + push 双远端，页面状态区显示仓库路径/最近提交/推送结果；**定时自动备份**：应用运行期间按间隔自动推送（默认 5 分钟，面板下拉 1/5/15/30 分钟或关闭，存 localStorage `vt:backupInterval`，启动后先检查一次可重试失败推送；内容无变化且上次成功则跳过），仓库路径可用环境变量 `BACKUP_REPO_PATH` 覆盖，接口不可用时自动退回浏览器下载；**备份历史**：面板可展开 git 备份版本列表（`/versions` 接口返回最近 50 条，界面仅展示最近 5 条），每个版本支持预览记录（`/version?hash=`）、下载 JSON、导入此版本回灌应用
+- 页面记录：实时转录/文件转写/AI 总结页底部各自展示本页历史（PageRecordsSection 按 source 过滤，无记录时隐藏），行内点击展开全文预览（AI 记录预览去除 markdown 符号）、「载入」回填到页面结果区（有内容先 confirm 替换；录音/转写/总结进行中禁止载入）、「下载」导出 TXT；记录增删改通过 history.ts 的 `vt-history-changed` 窗口事件驱动各页面记录区自动刷新；AI 总结历史为生成成功后**自动存入**（source `ai`，engine 存模型名，durationSec 恒为 0，text 存 markdown 结果），实时/文件转写仍为手动「存入历史」，AI 页「从历史导入」下拉仍仅列转写记录（过滤 `ai`）；**历史页不再展示记录列表**，专注 git 备份管理（导出/导入/自动推送/版本浏览恢复），items 仅作备份内容与「备份并推送/清空」按钮显隐之用
 
 ## 3. 目录与关键文件职责
 
@@ -54,6 +54,7 @@ src/lib/store/settings.tsx         # 设置 Context + localStorage（键 vt:sett
 src/lib/store/history.ts           # IndexedDB（库 vt-db / 表 history）
 src/pages/                         # LivePage / FilePage / AiPage / HistoryPage / SettingsPage
 src/components/MarkdownView.tsx    # LLM 输出渲染（marked + DOMPurify，样式 .md-view）
+src/components/pageRecords.tsx     # 页面记录区：按 source 过滤展示本页历史（预览/载入/下载 TXT），三个功能页复用
 proxy.mjs                          # 可选 CORS 透明代理（npm run proxy，端口 8787，路径 /proxy/<目标URL>）
 vite.config.ts                     # dev 服务器 CORS 流式透传代理（/proxy/<目标URL>，支持 SSE 逐字转发，与 proxy.mjs 等价）
 ```
