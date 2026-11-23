@@ -24,6 +24,7 @@
 - 本地 ASR：sherpa-onnx 官方 WASM 构建（streaming zipformer 中英双语 int8）
 - 音频链路：getUserMedia → AudioWorklet（16kHz PCM16 + RMS 电平）→ 流式识别 / WAV 分段
 - 存储：localStorage（设置）· IndexedDB（历史）· Cache API（模型缓存）
+- 历史备份：历史页支持全量导出/导入 JSON（含全部元数据，按 id 合并去重），配合 voice_transcription_database 仓库（Gitee + GitHub 双推）做跨设备持久化
 
 ## 3. 目录与关键文件职责
 

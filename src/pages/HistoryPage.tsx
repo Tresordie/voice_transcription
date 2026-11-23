@@ -1,5 +1,5 @@
-// 历史记录页：转录结果列表、查看、复制、删除
-import { useCallback, useEffect, useState } from 'react'
+// 历史记录页：转录结果列表、查看、复制、删除、全量导出/导入
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AudioLines,
   ChevronDown,
@@ -9,10 +9,12 @@ import {
   FileAudio2,
   History,
   Trash2,
+  Upload,
 } from 'lucide-react'
 import {
   clearHistory,
   deleteHistoryItem,
+  importHistoryItems,
   listHistory,
   type HistoryItem,
 } from '../lib/store/history'
@@ -24,6 +26,7 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
   const [items, setItems] = useState<HistoryItem[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -62,20 +65,68 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
     toast.show('info', '历史已清空')
   }
 
+  // 全量导出 JSON（含 source/engine/时长等元数据），可用于备份或换设备迁移
+  const exportAll = () => {
+    const payload = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      count: items.length,
+      items,
+    }
+    downloadText(JSON.stringify(payload, null, 2), timestampName('历史备份', 'json'))
+    toast.show('success', '已导出')
+  }
+
+  // 导入 JSON 备份：按 id 合并去重，不覆盖已有记录
+  const importAll = async (file: File) => {
+    try {
+      const data = JSON.parse(await file.text())
+      const arr = Array.isArray(data) ? data : data?.items
+      if (!Array.isArray(arr)) throw new Error('bad format')
+      const { added, skipped } = await importHistoryItems(arr)
+      await refresh()
+      toast.show('success', `导入 ${added} 条${skipped > 0 ? `，跳过 ${skipped} 条` : ''}`)
+    } catch {
+      toast.show('error', '文件格式不正确')
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
   return (
     <div className="flex flex-col gap-5">
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">历史记录</h1>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            保存的转录结果仅存于你的浏览器中
+            保存的转录结果仅存于你的浏览器中，支持导出 JSON 备份与导入恢复
           </p>
         </div>
-        {items.length > 0 && (
-          <button className="btn-danger" onClick={removeAll}>
-            <Trash2 className="h-4 w-4" /> 清空
+        <div className="flex shrink-0 items-center gap-2">
+          <button className="btn-secondary" onClick={() => fileInputRef.current?.click()}>
+            <Upload className="h-4 w-4" /> 导入
           </button>
-        )}
+          {items.length > 0 && (
+            <>
+              <button className="btn-secondary" onClick={exportAll}>
+                <Download className="h-4 w-4" /> 导出全部
+              </button>
+              <button className="btn-danger" onClick={removeAll}>
+                <Trash2 className="h-4 w-4" /> 清空
+              </button>
+            </>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) void importAll(f)
+            }}
+          />
+        </div>
       </header>
 
       {loading ? (
