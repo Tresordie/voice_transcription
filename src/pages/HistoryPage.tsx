@@ -44,8 +44,13 @@ interface BackupOpResult {
 const remoteName = (url: string) =>
   url.includes('github') ? 'GitHub' : url.includes('gitee') ? 'Gitee' : url
 
+// 自动备份间隔（分钟），存 localStorage；0 = 关闭
+const BACKUP_INTERVAL_KEY = 'vt:backupInterval'
+const BACKUP_INTERVAL_OPTIONS = [1, 5, 15, 30]
+const BACKUP_INTERVAL_DEFAULT = 5
+
 export default function HistoryPage({ active = true }: { active?: boolean }) {
-  const toast = useToast()
+  const { show: showToast } = useToast()
   const [items, setItems] = useState<HistoryItem[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
@@ -53,6 +58,13 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null)
   const [backupResult, setBackupResult] = useState<BackupOpResult | null>(null)
   const [backupBusy, setBackupBusy] = useState(false)
+  const [backupIntervalMin, setBackupIntervalMin] = useState<number>(() => {
+    const v = Number(localStorage.getItem(BACKUP_INTERVAL_KEY))
+    return Number.isFinite(v) && (v === 0 || BACKUP_INTERVAL_OPTIONS.includes(v)) ? v : BACKUP_INTERVAL_DEFAULT
+  })
+  // 上次自动备份的内容指纹与结果：内容未变且上次推送全部成功时跳过本轮
+  const lastBackupRef = useRef<{ itemsJson: string; allOk: boolean } | null>(null)
+  const lastTickOkRef = useRef<boolean | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -74,13 +86,15 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
     }
   }, [])
 
+  // 备份服务状态挂载即获取（页面常驻，自动备份不依赖本页可见）
+  useEffect(() => {
+    void loadBackupStatus()
+  }, [loadBackupStatus])
+
   // 页面保持挂载：每次切回本页时刷新列表（捕获其他页面新存入的记录）
   useEffect(() => {
-    if (active) {
-      void refresh()
-      void loadBackupStatus()
-    }
-  }, [active, refresh, loadBackupStatus])
+    if (active) void refresh()
+  }, [active, refresh])
 
   const toggle = (id: string) => {
     setExpanded((s) => {
@@ -94,7 +108,7 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
   const remove = async (id: string) => {
     await deleteHistoryItem(id)
     setItems((xs) => xs.filter((x) => x.id !== id))
-    toast.show('info', '已删除')
+    showToast('info', '已删除')
   }
 
   const removeAll = async () => {
@@ -102,7 +116,7 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
     if (!window.confirm(`确定清空全部 ${items.length} 条历史记录吗？`)) return
     await clearHistory()
     setItems([])
-    toast.show('info', '历史已清空')
+    showToast('info', '历史已清空')
   }
 
   // 全量导出 JSON（含 source/engine/时长等元数据）
@@ -129,14 +143,16 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
       void loadBackupStatus()
       const pushed = data.pushed ?? []
       const allOk = pushed.length > 0 && pushed.every((p) => p.ok)
+      lastBackupRef.current = { itemsJson: JSON.stringify(items), allOk }
+      lastTickOkRef.current = allOk
       const names = pushed.map((p) => `${remoteName(p.url)}${p.ok ? ' ✓' : ' ✗'}`).join(' · ')
-      toast.show(
+      showToast(
         allOk ? 'success' : 'error',
         data.committed ? `已备份并推送（${names}）` : `内容无变化，已同步（${names}）`,
       )
     } catch {
       downloadText(text, timestampName('历史备份', 'json'))
-      toast.show('info', '备份服务未连接，已改为浏览器下载')
+      showToast('info', '备份服务未连接，已改为浏览器下载')
     } finally {
       setBackupBusy(false)
     }
@@ -154,16 +170,79 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
         const pushed = data.pushed ?? []
         const allOk = pushed.length > 0 && pushed.every((p) => p.ok)
         const names = pushed.map((p) => `${remoteName(p.url)}${p.ok ? ' ✓' : ' ✗'}`).join(' · ')
-        toast.show(allOk ? 'success' : 'error', names ? `推送完成（${names}）` : '未找到推送地址')
+        showToast(allOk ? 'success' : 'error', names ? `推送完成（${names}）` : '未找到推送地址')
       } else {
-        toast.show('error', data.error || '推送失败')
+        showToast('error', data.error || '推送失败')
       }
     } catch {
-      toast.show('error', '备份服务未连接')
+      showToast('error', '备份服务未连接')
     } finally {
       setBackupBusy(false)
     }
   }
+
+  // 自动备份单次执行：有新转录才提交推送，内容无变化且上次已成功则跳过
+  const autoTick = useCallback(async () => {
+    try {
+      const r = await fetch('/backup-api/status')
+      if (!r.ok) return
+      if (!((await r.json()) as BackupStatus)?.connected) return
+    } catch {
+      return // 服务不可达，静默等待下一轮
+    }
+    const items = await listHistory()
+    if (items.length === 0) return
+    const itemsJson = JSON.stringify(items)
+    const last = lastBackupRef.current
+    if (last && last.itemsJson === itemsJson && last.allOk) return
+    setBackupBusy(true)
+    try {
+      const payload = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        count: items.length,
+        items,
+      }
+      const r = await fetch('/backup-api/save', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload, null, 2),
+      })
+      const data: BackupOpResult = await r.json()
+      if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`)
+      setBackupResult(data)
+      void loadBackupStatus()
+      const pushed = data.pushed ?? []
+      const allOk = pushed.length > 0 && pushed.every((p) => p.ok)
+      lastBackupRef.current = { itemsJson, allOk }
+      // 仅在失败/恢复的状态切换时提示，避免每轮弹窗刷屏
+      if (!allOk && lastTickOkRef.current !== false) {
+        const failed = pushed.filter((p) => !p.ok).map((p) => remoteName(p.url)).join('、')
+        showToast('error', `自动备份推送失败：${failed || '未知远端'}`)
+      } else if (allOk && lastTickOkRef.current === false) {
+        showToast('success', '自动备份推送已恢复')
+      }
+      lastTickOkRef.current = allOk
+    } catch (e) {
+      if (lastTickOkRef.current !== false) showToast('error', `自动备份失败：${(e as Error).message}`)
+      lastTickOkRef.current = false
+    } finally {
+      setBackupBusy(false)
+    }
+  }, [showToast, loadBackupStatus])
+
+  // 定时自动备份：启动后先检查一次（可重试上次失败），之后按设定间隔执行
+  const backupConnected = backupStatus?.connected === true
+  useEffect(() => {
+    if (!backupConnected || backupIntervalMin === 0) return
+    const tick = () => void autoTick()
+    const first = setTimeout(tick, 3000)
+    const timer = setInterval(tick, backupIntervalMin * 60_000)
+    return () => {
+      clearTimeout(first)
+      clearInterval(timer)
+    }
+  }, [backupConnected, backupIntervalMin, autoTick])
 
   // 导入 JSON 备份：按 id 合并去重，不覆盖已有记录
   const importAll = async (file: File) => {
@@ -173,9 +252,9 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
       if (!Array.isArray(arr)) throw new Error('bad format')
       const { added, skipped } = await importHistoryItems(arr)
       await refresh()
-      toast.show('success', `导入 ${added} 条${skipped > 0 ? `，跳过 ${skipped} 条` : ''}`)
+      showToast('success', `导入 ${added} 条${skipped > 0 ? `，跳过 ${skipped} 条` : ''}`)
     } catch {
-      toast.show('error', '文件格式不正确')
+      showToast('error', '文件格式不正确')
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
@@ -221,13 +300,35 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
       <div className="card flex flex-col gap-1.5 px-4 py-3">
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm font-medium">git 备份</p>
-          <button
-            className="btn-secondary !px-3 !py-1.5 text-xs"
-            disabled={!backupStatus?.connected || backupBusy}
-            onClick={() => void pushBackup()}
-          >
-            推送
-          </button>
+          <div className="flex items-center gap-2">
+            {backupStatus?.connected && (
+              <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                自动备份
+                <select
+                  className="input !w-auto !rounded-lg !px-2 !py-1 text-xs"
+                  value={backupIntervalMin}
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    setBackupIntervalMin(v)
+                    localStorage.setItem(BACKUP_INTERVAL_KEY, String(v))
+                  }}
+                >
+                  {BACKUP_INTERVAL_OPTIONS.concat(0).map((v) => (
+                    <option key={v} value={v}>
+                      {v === 0 ? '关闭' : `每 ${v} 分钟`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <button
+              className="btn-secondary !px-3 !py-1.5 text-xs"
+              disabled={!backupStatus?.connected || backupBusy}
+              onClick={() => void pushBackup()}
+            >
+              推送
+            </button>
+          </div>
         </div>
         {backupStatus?.connected ? (
           <div className="text-xs leading-5 text-zinc-500 dark:text-zinc-400">
@@ -314,7 +415,7 @@ export default function HistoryPage({ active = true }: { active?: boolean }) {
                       <button
                         className="btn-secondary !px-3 !py-1.5 text-xs"
                         onClick={async () => {
-                          if (await copyText(item.text)) toast.show('success', '已复制')
+                          if (await copyText(item.text)) showToast('success', '已复制')
                         }}
                       >
                         <Copy className="h-3.5 w-3.5" /> 复制

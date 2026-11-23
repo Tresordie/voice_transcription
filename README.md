@@ -16,7 +16,7 @@
 - **实时转录**：麦克风采集 → 逐字流式显示（本地引擎）或 4 秒分段近实时（在线引擎），波形可视化、录音保存
 - **文件转写**：拖拽上传 wav / mp3 / m4a / ogg / webm 等，自动重采样、长文件自动分段
 - **AI 总结**：文本 / 附件（≤150MB，文档直接解析、音频自动转写）→ 自定义大模型按 25 套预设模板或自定义提示词生成结构化总结；超长文档自动分块理解全文；结果支持 Markdown / HTML / PDF / Word / Excel / PPT 导出与微信格式一键复制
-- **历史记录**：转录结果本地持久化（IndexedDB），支持复制 / 导出 TXT；全量导出/导入 JSON，dev 模式内置 git 备份服务，一键写入 [voice_transcription_database](https://github.com/Tresordie/voice_transcription_database) 仓库并自动推送 GitHub + Gitee 双端
+- **历史记录**：转录结果本地持久化（IndexedDB），支持复制 / 导出 TXT；全量导出/导入 JSON；dev 模式内置 git 备份服务，运行期间定时自动推送（默认 5 分钟，可调/可关）到 [voice_transcription_database](https://github.com/Tresordie/voice_transcription_database) 仓库（GitHub + Gitee 双端），也可手动一键推送
 - **开箱即用**：模型下载一次后缓存，离线可用；API Key 只存你的浏览器
 
 ## 快速开始
