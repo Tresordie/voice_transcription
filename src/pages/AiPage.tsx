@@ -21,7 +21,7 @@ import {
 import { useSettings } from '../lib/store/settings'
 import { useToast } from '../components/toast'
 import MarkdownView from '../components/MarkdownView'
-import { summarizeContent } from '../lib/ai/summarize'
+import { OUTPUT_LANGUAGES, summarizeContent } from '../lib/ai/summarize'
 import { extractFromFile, MAX_FILE_BYTES } from '../lib/ai/extract'
 import { SCENARIOS, TEMPLATES, type SummaryTemplate } from '../lib/ai/templates'
 import { exportSummary, markdownToWeChat, type ExportFormat } from '../lib/ai/exporters'
@@ -64,6 +64,7 @@ export default function AiPage() {
   const [scenario, setScenario] = useState<string>('all')
   const [template, setTemplate] = useState<SummaryTemplate | null>(null)
   const [userPrompt, setUserPrompt] = useState('')
+  const [lang, setLang] = useState('')
   const [running, setRunning] = useState(false)
   const [stage, setStage] = useState('')
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
@@ -166,6 +167,7 @@ export default function AiPage() {
       const full = await summarizeContent(settings.ai, content, {
         template,
         userPrompt,
+        language: lang,
         signal: ac.signal,
         onProgress: (s, done, total) => {
           setStage(s)
@@ -430,6 +432,16 @@ export default function AiPage() {
               : '告诉 AI 侧重什么、输出多长、给谁看…（留空则自动总结）'
           }
         />
+        <div className="mt-3 flex items-center gap-2">
+          <span className="shrink-0 text-sm text-zinc-500 dark:text-zinc-400">输出语言</span>
+          <select className="input !w-auto" value={lang} onChange={(e) => setLang(e.target.value)}>
+            {OUTPUT_LANGUAGES.map((l) => (
+              <option key={l.value || 'auto'} value={l.value}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           {running ? (
             <button className="btn-danger" onClick={cancel}>

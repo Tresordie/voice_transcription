@@ -14,9 +14,9 @@
 ## 功能
 
 - **实时转录**：麦克风采集 → 逐字流式显示（本地引擎）或 4 秒分段近实时（在线引擎），波形可视化、录音保存
-- **文件转写**：拖拽上传 wav / mp3 / m4a / ogg / webm 等，自动重采样、长文件自动分段
-- **AI 总结**：文本 / 附件（≤150MB，文档直接解析、音频自动转写）→ 自定义大模型按 25 套预设模板或自定义提示词生成结构化总结；超长文档自动分块理解全文；结果自动存入本页历史；结果支持 Markdown / HTML / PDF / Word / Excel / PPT 导出与微信格式一键复制
-- **历史记录**：转录 / 总结结果本地持久化（IndexedDB），实时转录/文件转写/AI 总结页底部直接展示本页记录（预览全文、一键载入、下载 TXT）；历史页专注备份管理：全量导出/导入 JSON；dev 模式内置 git 备份服务，运行期间定时自动推送（默认 5 分钟，可调/可关）到 [voice_transcription_database](https://github.com/Tresordie/voice_transcription_database) 仓库（GitHub + Gitee 双端），可浏览备份历史版本、预览记录、下载 JSON 或一键导入恢复
+- **文件转写**：拖拽上传 wav / mp3 / m4a / ogg / webm 等，自动重采样、长文件自动分段；本地识别在后台 Worker 中执行，转写全程不卡界面
+- **AI 总结**：文本 / 附件（≤150MB，文档直接解析、音频自动转写）→ 自定义大模型按 25 套预设模板或自定义提示词生成结构化总结；超长文档自动分块理解全文；输出语言可选（跟随原文 / 简中 / 繁中 / 英 / 日 / 法 / 德 等 17 项）；结果自动存入本页历史；结果支持 Markdown / HTML / PDF / Word / Excel / PPT 导出与微信格式一键复制
+- **历史记录**：转录 / 总结结果完成后自动存入本地持久化（IndexedDB，无需手动保存），实时转录/文件转写/AI 总结页底部直接展示本页记录（预览全文、一键载入、下载 TXT、删除单条/清空本页）；历史页专注备份管理：全量导出/导入 JSON；dev 模式内置 git 备份服务，运行期间定时自动推送（默认 5 分钟，可调/可关）到 [voice_transcription_database](https://github.com/Tresordie/voice_transcription_database) 仓库（GitHub + Gitee 双端），可浏览备份历史版本、预览记录、下载 JSON 或一键导入恢复
 - **开箱即用**：模型下载一次后缓存，离线可用；API Key 只存你的浏览器
 
 ## 快速开始
@@ -60,7 +60,7 @@ npm run dev
 
 1. 进入「设置」页 → 「AI 总结服务」区块，填入任意 OpenAI 兼容大模型的 Base URL / API Key / 模型名（如硅基流动、阿里百炼、DeepSeek、GLM），点「测试连接」确认
 2. 进入「AI 总结」页 → 粘贴文本或上传附件（pdf / docx / xlsx / pptx / txt 直接提取文本；音频自动转写；单文件 ≤150MB）→ 也可「从历史导入」转写记录
-3. 选择预设模板（25 套：会议纪要 / 日报周报 / 任务提取 / 邮件总结 / 邮件撰写）或自由总结，可叠加自定义提示词
+3. 选择预设模板（25 套：会议纪要 / 日报周报 / 任务提取 / 邮件总结 / 邮件撰写）或自由总结，可叠加自定义提示词，可在「输出语言」下拉指定总结语言（默认跟随原文）
 4. 生成后一键导出 Markdown / HTML / PDF / Word / Excel / PPT，或复制「微信格式」直接粘贴到微信发送
 
 > 超长文档会自动分块理解全文后再总结（map-reduce）；模板来自 [scenario-templates](./scripts/extract-templates.mjs) 数据源，可用 `node scripts/extract-templates.mjs` 重新生成。
@@ -122,10 +122,11 @@ npm run preview # 本地预览构建产物
 ```
 ├── public/sherpa/        # 本地引擎运行时（wasm + 官方封装层；offline/ 为自建离线构建）
 ├── public/worklets/      # AudioWorklet 采集器
+├── public/asr-file-worker.js  # 文件转写 Worker（经典脚本免打包）：WASM 解码移出主线程，不卡 UI
 ├── src/
 │   ├── lib/
 │   │   ├── audio/        # 采集、WAV 编解码、重采样、分段器
-│   │   ├── asr/          # 本地流式引擎、离线高精度引擎（SenseVoice）、在线客户端（OpenAI 兼容 + 百炼协议探测）
+│   │   ├── asr/          # 本地流式引擎、离线高精度引擎（SenseVoice）、在线客户端（OpenAI 兼容 + 百炼协议探测）、文件转写 Worker 桥接
 │   │   ├── ai/           # AI 总结：模板库（25 套）、LLM 客户端、附件提取、map-reduce 编排、多格式导出、微信格式
 │   │   ├── models/       # 模型目录与下载缓存
 │   │   └── store/        # 设置、历史
@@ -138,10 +139,10 @@ npm run preview # 本地预览构建产物
 
 ## Roadmap
 
-- [ ] 本地高精度文件模型（SenseVoice，需自建 wasm/web 运行时）
+- [x] 本地高精度文件模型（SenseVoice，已上线——自建 vad-asr wasm 构建，解码在后台 Worker 中执行）
 - [ ] 转写结果导出 SRT 字幕
 - [ ] 说话人分离（VAD + diarization）
-- [ ] 热词增强
+- [ ] 本地引擎热词增强（在线引擎已支持热词/上下文）
 - [ ] Electron 桌面打包（双击运行，麦克风免配置，模型可选内置）
 
 ## License

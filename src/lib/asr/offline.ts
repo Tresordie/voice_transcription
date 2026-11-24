@@ -10,7 +10,7 @@
 import { useSyncExternalStore } from 'react'
 import { SENSEVOICE_OFFLINE } from '../models/catalog'
 import { downloadWithProgress, deleteCached, isCached, cachedSize, type DownloadProgress } from '../models/downloader'
-import { joinParts } from './online'
+import { transcribeInWorker } from './fileWorker'
 
 // ---------- 全局类型 ----------
 // wrapper（/sherpa/offline/sherpa-onnx-asr.js，IIFE 隔离版）暴露到 window.SherpaOnnxOfflineNS
@@ -93,7 +93,6 @@ function setState(patch: Partial<OfflineEngineState>): void {
 // ---------- 引擎实现 ----------
 const RUNTIME_BASE = `${import.meta.env.BASE_URL}sherpa/offline`
 const MODEL_PATH = '/sense-voice.onnx'
-const TOKENS_PATH = './tokens.txt' // 由 .data 预加载挂载到根目录
 
 let modulePromise: Promise<SherpaOfflineModule> | null = null
 let abortController: AbortController | null = null
@@ -219,14 +218,12 @@ export async function offlineModelCachedSize(): Promise<number> {
 }
 
 // ---------- 文件转写（本地离线） ----------
-// SenseVoice 结果理论上无特殊标签，防御性剥离一次（个别版本会带 <|zh|> 等标记）
-function stripSenseTags(text: string): string {
-  return text.replace(/<\|[^|]*\|>/g, '').trim()
-}
 
 /**
  * 非流式整段转写：按 30s 分块顺序解码并拼接（ SenseVoice 设计时长为短音频，
  * 过长分段会显著拖慢且影响标点质量）。
+ * 解码在文件转写 Worker 中执行（WASM 解码不再阻塞主线程 UI）；
+ * 模型须已缓存（调用方以 offlineModelCached() 预检），Worker 从 Cache API 读取。
  * language: 'auto' 传空串（模型自动检测），'zh'/'en' 直传。
  */
 export async function transcribePcmOffline(
@@ -234,43 +231,8 @@ export async function transcribePcmOffline(
   language = '',
   opts: {
     onProgress?: (done: number, total: number) => void
+    onStage?: (message: string) => void
   } = {},
 ): Promise<string> {
-  const mod = await ensureOfflineEngine()
-  const NS = window.SherpaOnnxOfflineNS
-  if (!NS) throw new Error('离线引擎未初始化')
-
-  const recognizer = new NS.OfflineRecognizer(
-    {
-      modelConfig: {
-        tokens: TOKENS_PATH,
-        senseVoice: {
-          model: MODEL_PATH,
-          useInverseTextNormalization: 1,
-          ...(language ? { language } : {}),
-        },
-        debug: 0,
-      },
-    },
-    mod,
-  )
-
-  const chunkSamples = 30 * 16000
-  const totalChunks = Math.max(1, Math.ceil(pcm.length / chunkSamples))
-  const parts: string[] = []
-  for (let i = 0; i < totalChunks; i++) {
-    const seg = pcm.subarray(i * chunkSamples, Math.min((i + 1) * chunkSamples, pcm.length))
-    const f32 = new Float32Array(seg.length)
-    for (let j = 0; j < seg.length; j++) f32[j] = seg[j] / 32768
-    const stream = recognizer.createStream()
-    stream.acceptWaveform(16000, f32)
-    recognizer.decode(stream)
-    parts.push(stripSenseTags(recognizer.getResult(stream).text ?? ''))
-    stream.free()
-    opts.onProgress?.(i + 1, totalChunks)
-    // 让出主线程，避免长时间阻塞 UI
-    await new Promise((r) => setTimeout(r, 0))
-  }
-  recognizer.free()
-  return joinParts(parts)
+  return transcribeInWorker('offline', pcm, language, opts)
 }

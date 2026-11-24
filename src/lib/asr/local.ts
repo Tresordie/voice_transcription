@@ -9,6 +9,7 @@ import { useSyncExternalStore } from 'react'
 import { fixLocalCase } from './case'
 import { ZIPFORMER_ZH_EN } from '../models/catalog'
 import { cachedBlobUrl, cachedSize, deleteCached, isCached, type DownloadProgress } from '../models/downloader'
+import { transcribeInWorker } from './fileWorker'
 
 // ---------- 全局类型（由 public/sherpa/sherpa-onnx-asr.js 的 epilogue 挂载） ----------
 interface SherpaOnlineStream {
@@ -244,30 +245,20 @@ export class LocalStreamSession {
 }
 
 // ---------- 文件转写（本地） ----------
-// 流式识别器处理整段音频：按 1s 喂入，收集 endpoint 定稿 + 尾部文本
+
+/**
+ * 流式识别器处理整段音频：按 1s 喂入，收集 endpoint 定稿 + 尾部文本。
+ * 解码在文件转写 Worker 中执行（WASM 解码不再阻塞主线程 UI）；
+ * 模型未缓存时先在主线程下载（进度经 localEngineState 展示），Worker 只读缓存。
+ * 入参须为 16kHz PCM（decodeToPcm16k 的产物）。
+ */
 export async function transcribePcmLocal(
-  module: SherpaModule,
   pcm: Int16Array,
-  sampleRate = 16000,
+  opts: {
+    onProgress?: (done: number, total: number) => void
+    onStage?: (message: string) => void
+  } = {},
 ): Promise<string> {
-  if (sampleRate !== 16000) throw new Error('本地引擎仅支持 16kHz PCM')
-  const session = new LocalStreamSession(module)
-  const finals: string[] = []
-  let lastPartial = ''
-  session.onFinal = (t) => {
-    finals.push(t)
-    lastPartial = ''
-  }
-  session.onPartial = (t) => {
-    lastPartial = t
-  }
-  const chunk = 16000 // 1s
-  for (let off = 0; off < pcm.length; off += chunk) {
-    session.feed(pcm.subarray(off, Math.min(off + chunk, pcm.length)))
-    // 让出主线程，避免长时间阻塞 UI
-    await new Promise((r) => setTimeout(r, 0))
-  }
-  const tail = session.finish()
-  session.dispose()
-  return [...finals, tail, lastPartial].filter(Boolean).join('')
+  if (!(await localModelCached())) await ensureLocalEngine()
+  return transcribeInWorker('local', pcm, '', opts)
 }

@@ -128,7 +128,7 @@ function Shell() {
 
       {/* 主内容：五个页面保持挂载（切页不丢输入状态），用 hidden 切换可见性 */}
       <main className="flex-1 overflow-y-auto pt-16 md:pt-0">
-        <div className="mx-auto w-full max-w-4xl px-4 py-6 md:px-8 md:py-10">
+        <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-8 md:py-10">
           <div data-page="live" className={view === 'live' ? 'animate-fade-up' : 'hidden'}>
             <LivePage active={view === 'live'} />
           </div>

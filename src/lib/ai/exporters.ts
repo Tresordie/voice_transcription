@@ -41,15 +41,17 @@ const DOC_CSS_RULES = `
   #ai-export-root hr { border: none; border-top: 1px solid #e5e7eb; margin: 1.4em 0; }
 `
 // 导出 html/doc 用（独立文档，body 级样式）；pdf 用根作用域版本避免泄漏到应用页面
+// 屏显宽度与应用主容器同步（App.tsx max-w-7xl = 1280px）；打印宽度由 PRINT_CSS 收回纸张宽度
 const DOC_CSS = `
   body { font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; color: #1f2937;
-         line-height: 1.75; max-width: 760px; margin: 0 auto; padding: 32px 24px; }
+         line-height: 1.75; max-width: 1280px; margin: 0 auto; padding: 32px 24px; }
   ${DOC_CSS_RULES.replaceAll('#ai-export-root', 'body')}
 `
-// PDF 打印兜底：纸张无法滚动，宽图退回等比缩放（完整优先于清晰）
+// PDF 打印兜底：纸张无法滚动，宽图退回等比缩放（完整优先于清晰）；
+// 正文宽度收回 A4 可打印宽度（约 760px @96dpi），否则 1280px 会被打印缩放导致文字变小
 const PRINT_CSS = `
   @media print {
-    body { padding: 0; }
+    body { padding: 0; max-width: 760px; }
     body .md-figure svg.md-fig-wide { width: auto !important; max-width: 100% !important; }
   }
 `

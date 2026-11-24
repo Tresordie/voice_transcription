@@ -5,7 +5,6 @@ import {
   Copy,
   Download,
   FileAudio2,
-  Save,
   Sparkles,
   Trash2,
   Upload,
@@ -13,7 +12,6 @@ import {
 } from 'lucide-react'
 import { decodeToPcm16k } from '../lib/audio/wav'
 import {
-  ensureLocalEngine,
   localEngineState,
   transcribePcmLocal,
   useLocalEngineVersion,
@@ -103,12 +101,17 @@ export default function FilePage() {
           text = await transcribePcmOffline(
             pcm,
             settings.language === 'auto' ? '' : settings.language,
-            { onProgress: (done, total) => setProgress({ done, total }) },
+            {
+              onProgress: (done, total) => setProgress({ done, total }),
+              onStage: (message) => setStatusMsg(message),
+            },
           )
         } else {
-          const module = await ensureLocalEngine()
           setStatusMsg('本地识别中（快于实时速度）…')
-          text = await transcribePcmLocal(module, pcm)
+          text = await transcribePcmLocal(pcm, {
+            onProgress: (done, total) => setProgress({ done, total }),
+            onStage: (message) => setStatusMsg(message),
+          })
         }
       } else {
         if (!settings.apiKey) {
@@ -125,6 +128,17 @@ export default function FilePage() {
       setResult(text)
       if (!text.trim()) {
         toast.show('info', '转写完成，但未识别到语音内容')
+      } else {
+        // 转写完成即自动存入本页历史（与 AI 总结页一致），空文本不存
+        await addHistoryItem({
+          id: newId(),
+          createdAt: Date.now(),
+          source: 'file',
+          engine: isLocal ? '本地模型' : `在线 · ${settings.model}`,
+          durationSec: duration ?? 0,
+          text,
+        })
+        toast.show('success', '转写完成，已存入历史记录')
       }
     } catch (e) {
       const err = e as Error
@@ -140,19 +154,6 @@ export default function FilePage() {
   const cancel = () => {
     abortRef.current?.abort()
     toast.show('info', '已取消')
-  }
-
-  const saveToHistory = async () => {
-    if (!result.trim()) return
-    await addHistoryItem({
-      id: newId(),
-      createdAt: Date.now(),
-      source: 'file',
-      engine: isLocal ? '本地模型' : `在线 · ${settings.model}`,
-      durationSec: duration ?? 0,
-      text: result,
-    })
-    toast.show('success', '已存入历史记录')
   }
 
   // 从页面记录区载入一条历史到当前转写结果（有内容先确认替换）
@@ -307,9 +308,6 @@ export default function FilePage() {
               onClick={() => downloadText(result, timestampName('转写', 'txt'))}
             >
               <Download className="h-4 w-4" /> 导出 TXT
-            </button>
-            <button className="btn-secondary" onClick={saveToHistory}>
-              <Save className="h-4 w-4" /> 存入历史
             </button>
             <button
               className="btn-danger"

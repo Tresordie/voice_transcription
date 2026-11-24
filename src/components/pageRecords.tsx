@@ -1,8 +1,15 @@
-// 页面记录区：各功能页展示本页（按 source 过滤）的历史记录，支持全文预览、载入结果区、下载 TXT
+// 页面记录区：各功能页展示本页（按 source 过滤）的历史记录，支持全文预览、载入结果区、下载 TXT、删除
 import { useCallback, useEffect, useState } from 'react'
-import { Download, History, Upload } from 'lucide-react'
-import { HISTORY_CHANGED_EVENT, listHistory, type HistoryItem } from '../lib/store/history'
+import { Download, History, Trash2, Upload } from 'lucide-react'
+import {
+  HISTORY_CHANGED_EVENT,
+  clearHistoryBySource,
+  deleteHistoryItem,
+  listHistory,
+  type HistoryItem,
+} from '../lib/store/history'
 import { downloadText, formatDate, formatDuration, timestampName } from '../lib/utils'
+import { useToast } from './toast'
 
 export default function PageRecordsSection({
   source,
@@ -17,6 +24,7 @@ export default function PageRecordsSection({
 }) {
   const [items, setItems] = useState<HistoryItem[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toast = useToast()
 
   const refresh = useCallback(async () => {
     const all = await listHistory()
@@ -32,6 +40,19 @@ export default function PageRecordsSection({
   }, [refresh])
 
   if (items.length === 0) return null
+
+  // 删除单条 / 清空本页记录后由 HISTORY_CHANGED_EVENT 驱动刷新
+  const remove = async (id: string) => {
+    await deleteHistoryItem(id)
+    toast.show('info', '已删除该条记录')
+  }
+
+  const removeAll = async () => {
+    if (items.length === 0) return
+    if (!window.confirm(`确定删除本页全部 ${items.length} 条历史记录吗？`)) return
+    await clearHistoryBySource(source)
+    toast.show('info', '已删除本页全部记录')
+  }
 
   const toggle = (id: string) => {
     setExpanded((s) => {
@@ -54,6 +75,13 @@ export default function PageRecordsSection({
         <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
           {items.length} 条
         </span>
+        <button
+          className="btn-danger ml-auto !px-2 !py-0.5 !text-[11px]"
+          title="删除本页全部记录"
+          onClick={removeAll}
+        >
+          <Trash2 className="h-3 w-3" /> 删除全部
+        </button>
       </div>
       <div className="mt-3 flex max-h-80 flex-col gap-2 overflow-y-auto">
         {items.map((item) => {
@@ -79,6 +107,13 @@ export default function PageRecordsSection({
                     onClick={() => downloadText(item.text, timestampName(filePrefix, 'txt'))}
                   >
                     <Download className="h-3 w-3" /> 下载
+                  </button>
+                  <button
+                    className="btn-danger !px-2 !py-0.5 !text-[11px]"
+                    title="删除这条记录"
+                    onClick={() => remove(item.id)}
+                  >
+                    <Trash2 className="h-3 w-3" /> 删除
                   </button>
                 </div>
               </div>

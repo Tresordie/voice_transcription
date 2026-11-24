@@ -1,7 +1,7 @@
 // 附件 → 纯文本提取：文本类直读；pdf/docx/xlsx/pptx 动态解析；音频走应用已有转写引擎
 // 依赖均按需动态 import，不进首屏 chunk
 import { transcribeFile, type OnlineConfig } from '../asr/online'
-import { ensureLocalEngine, transcribePcmLocal } from '../asr/local'
+import { transcribePcmLocal } from '../asr/local'
 import { offlineModelCached, transcribePcmOffline } from '../asr/offline'
 import { decodeToPcm16k } from '../audio/wav'
 import type { AppSettings } from '../store/settings'
@@ -134,12 +134,17 @@ async function transcribeAudio(
     return transcribePcmOffline(
       pcm,
       settings.language === 'auto' ? '' : settings.language,
-      { onProgress: (done, total) => onProgress({ stage: '音频转写中（SenseVoice 高精度）', done, total }) },
+      {
+        onProgress: (done, total) => onProgress({ stage: '音频转写中（SenseVoice 高精度）', done, total }),
+        onStage: (message) => onProgress({ stage: message }),
+      },
     )
   }
   onProgress({ stage: '音频转写中（Zipformer 流式，耗时较长）' })
-  const mod = await ensureLocalEngine()
-  return transcribePcmLocal(mod, pcm)
+  return transcribePcmLocal(pcm, {
+    onProgress: (done, total) => onProgress({ stage: '音频转写中（Zipformer 流式）', done, total }),
+    onStage: (message) => onProgress({ stage: message }),
+  })
 }
 
 // ---------- 主入口 ----------

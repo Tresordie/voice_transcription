@@ -74,6 +74,30 @@ export async function clearHistory(): Promise<void> {
   notifyChanged()
 }
 
+/** 清空某一来源（页面）的全部记录，如实时转录页只删 source='live' 的 */
+export async function clearHistoryBySource(source: HistoryItem['source']): Promise<void> {
+  const db = await openDb()
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(STORE, 'readwrite')
+      const store = t.objectStore(STORE)
+      const getAllReq = store.getAll()
+      getAllReq.onsuccess = () => {
+        for (const item of getAllReq.result as HistoryItem[]) {
+          if (item.source === source) store.delete(item.id)
+        }
+      }
+      t.oncomplete = () => {
+        resolve()
+        notifyChanged()
+      }
+      t.onerror = () => reject(t.error)
+    })
+  } finally {
+    db.close()
+  }
+}
+
 /** 校验单条导入数据，非法返回 null */
 function validateItem(x: unknown): HistoryItem | null {
   const it = x as Partial<HistoryItem> | null

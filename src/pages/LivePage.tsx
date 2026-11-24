@@ -5,7 +5,6 @@ import {
   Copy,
   Download,
   Mic,
-  Save,
   Square,
   Trash2,
 } from 'lucide-react'
@@ -167,6 +166,19 @@ export default function LivePage({ active = true }: { active?: boolean }) {
       setRecordingBlob(blob)
       setLevels([])
       setPhase('idle')
+      // 转录完成即自动存入本页历史（与 AI 总结页一致），空文本不存
+      const text = joinParts(finalsRef.current)
+      if (text.trim()) {
+        await addHistoryItem({
+          id: newId(),
+          createdAt: Date.now(),
+          source: 'live',
+          engine: isLocal ? '本地模型' : `在线 · ${settings.model}`,
+          durationSec: elapsed,
+          text,
+        })
+        toast.show('success', '转录完成，已存入历史记录')
+      }
     } catch (e) {
       toast.show('error', (e as Error).message)
       setPhase('idle')
@@ -190,19 +202,6 @@ export default function LivePage({ active = true }: { active?: boolean }) {
   useEffect(() => {
     if (!active && liveRef.current) void stopRef.current()
   }, [active])
-
-  const saveToHistory = async () => {
-    if (!fullText.trim()) return
-    await addHistoryItem({
-      id: newId(),
-      createdAt: Date.now(),
-      source: 'live',
-      engine: isLocal ? '本地模型' : `在线 · ${settings.model}`,
-      durationSec: elapsed,
-      text: fullText,
-    })
-    toast.show('success', '已存入历史记录')
-  }
 
   // 从页面记录区载入一条历史到当前转录结果（有内容先确认替换）
   const loadFromHistory = (item: HistoryItem) => {
@@ -339,9 +338,6 @@ export default function LivePage({ active = true }: { active?: boolean }) {
             onClick={() => downloadText(fullText, timestampName('转录', 'txt'))}
           >
             <Download className="h-4 w-4" /> 导出 TXT
-          </button>
-          <button className="btn-secondary" onClick={saveToHistory}>
-            <Save className="h-4 w-4" /> 存入历史
           </button>
           {recordingBlob && (
             <a

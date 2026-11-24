@@ -1,7 +1,7 @@
 # VoiceTrans · 项目交接文档
 
 > 本文档面向后续接手维护/开发的工程师。产品介绍见 [README.md](./README.md)。
-> 最后更新：2026-11-23 · 版本 v0.1.x（以 package.json 为准）
+> 最后更新：2026-11-24 · 版本 v0.1.x（以 package.json 为准）
 
 ## 1. 项目概况
 
@@ -25,7 +25,9 @@
 - 音频链路：getUserMedia → AudioWorklet（16kHz PCM16 + RMS 电平）→ 流式识别 / WAV 分段
 - 存储：localStorage（设置）· IndexedDB（历史）· Cache API（模型缓存）
 - 历史备份：历史页支持全量导出/导入 JSON（含全部元数据，按 id 合并去重）；dev 服务器内置 `/backup-api` 备份服务（vite.config.ts backupPlugin）——「备份并推送」直接写入 voice_transcription_database 仓库 data/history.json 并自动 commit + push 双远端，页面状态区显示仓库路径/最近提交/推送结果；**定时自动备份**：应用运行期间按间隔自动推送（默认 5 分钟，面板下拉 1/5/15/30 分钟或关闭，存 localStorage `vt:backupInterval`，启动后先检查一次可重试失败推送；内容无变化且上次成功则跳过），仓库路径可用环境变量 `BACKUP_REPO_PATH` 覆盖，接口不可用时自动退回浏览器下载；**备份历史**：面板可展开 git 备份版本列表（`/versions` 接口返回最近 50 条，界面仅展示最近 5 条），每个版本支持预览记录（`/version?hash=`）、下载 JSON、导入此版本回灌应用
-- 页面记录：实时转录/文件转写/AI 总结页底部各自展示本页历史（PageRecordsSection 按 source 过滤，无记录时隐藏），行内点击展开全文预览（AI 记录预览去除 markdown 符号）、「载入」回填到页面结果区（有内容先 confirm 替换；录音/转写/总结进行中禁止载入）、「下载」导出 TXT；记录增删改通过 history.ts 的 `vt-history-changed` 窗口事件驱动各页面记录区自动刷新；AI 总结历史为生成成功后**自动存入**（source `ai`，engine 存模型名，durationSec 恒为 0，text 存 markdown 结果），实时/文件转写仍为手动「存入历史」，AI 页「从历史导入」下拉仍仅列转写记录（过滤 `ai`）；**历史页不再展示记录列表**，专注 git 备份管理（导出/导入/自动推送/版本浏览恢复），items 仅作备份内容与「备份并推送/清空」按钮显隐之用
+- 页面记录：实时转录/文件转写/AI 总结页底部各自展示本页历史（PageRecordsSection 按 source 过滤，无记录时隐藏），行内点击展开全文预览（AI 记录预览去除 markdown 符号）、「载入」回填到页面结果区（有内容先 confirm 替换；录音/转写/总结进行中禁止载入）、「下载」导出 TXT；记录增删改通过 history.ts 的 `vt-history-changed` 窗口事件驱动各页面记录区自动刷新；AI 总结历史为生成成功后**自动存入**（source `ai`，engine 存模型名，durationSec 恒为 0，text 存 markdown 结果），2026-11-24 起实时/文件转写同样**完成即自动存入**（空文本不存，engine 存「本地模型」或「在线 · 模型名」，durationSec 存实际时长，手动「存入历史」按钮已移除）；AI 页「从历史导入」下拉仍仅列转写记录（过滤 `ai`）；**历史页不再展示记录列表**，专注 git 备份管理（导出/导入/自动推送/版本浏览恢复），items 仅作备份内容与「备份并推送/清空」按钮显隐之用；页面记录区（pageRecords.tsx）支持**删除**：单条删除与「删除全部」（history.ts 新增 `clearHistoryBySource` 按 source 清空本页，confirm 确认后执行，删除经 HISTORY_CHANGED_EVENT 驱动刷新）
+- 文件转写 Worker（2026-11-24 新增）：本地文件转写（SenseVoice 离线 / Zipformer 流式）的 WASM 解码整体移入 `public/asr-file-worker.js` 经典 Worker（免打包，public/ 下与 sherpa 运行时同源直载），修复转写期间主线程被解码阻塞导致的 UI 卡顿（离线每块 1-3s、流式每秒百余毫秒）。桥接层 `src/lib/asr/fileWorker.ts`：`transcribeInWorker` 单一在途任务协议（stage/progress/result/error），主线程 chain Promise 串行排队（多附件同时提取逐个转写），PCM ArrayBuffer 以 transferable 零拷贝下发（**调用后原 buffer 不可再用**）；`transcribePcmLocal`/`transcribePcmOffline` 签名随之简化（不再要求主线程先初始化引擎，onProgress/onStage 回调透传）。模型下载仍由主线程完成（设置页进度展示不受影响），Worker 只从 Cache API 读缓存（cache 名 `vt-model-cache` 与 downloader.ts 一致）；Worker 内以 `self.window = self` shim 两个按 window 挂载的 wrapper，stripSenseTags/joinParts/fixLocalCase 为纯函数复刻（与主线程 offline.ts/online.ts/case.ts 一致，**改动需两处同步**）。已知取舍：Worker 内任务不可取消（无 cancel 协议，「取消」仅对在线转写生效；旧主线程实现同样不可中断，非回归），详见 §4.7
+- AI 总结输出语言（2026-11-24 新增）：`summarize.ts` 新增 `OUTPUT_LANGUAGES`（跟随原文 + 16 种常用语言）与 `SummarizeOptions.language`；语言指令置于 system 提示词最末（模板与 G-SPEC 之后，优先级最高），并把 G-SPEC 结构要求逐条重述成对照清单，防「切换输出语言时契约衰减」；指定语言时中文固定措辞（【待确认】/【重点】等）改为输出语言等义标记（如 [TBC]）。AiPage「输出语言」下拉选择（会话内状态，不持久化），详见 §4.6
 
 ## 3. 目录与关键文件职责
 
@@ -36,11 +38,13 @@ public/sherpa/offline/             # 离线高精度引擎运行时（自建 vad
 ├── sherpa-onnx-wasm-main-asr.wasm #   WASM 主体 11.5MB
 └── sherpa-onnx-asr.js             #   官方 JS 封装层 + 我方 epilogue（挂 window.SherpaOnnxASR）
 public/worklets/pcm-collector.js   # AudioWorklet：采集 Float32 块发给主线程
+public/asr-file-worker.js          # 文件转写 Worker（经典脚本免打包）：sherpa WASM 解码移出主线程，协议见 src/lib/asr/fileWorker.ts
 src/lib/audio/wav.ts               # float/int16 转换、降采样、WAV 编码、decodeToPcm16k（OfflineAudioContext 重采样）
 src/lib/audio/capture.ts           # MicRecorder：麦克风采集 + 电平 + MediaRecorder 录制 webm
 src/lib/audio/segmenter.ts         # LiveSegmenter：在线实时模式的 4s 固定分段器
-src/lib/asr/local.ts               # 本地流式引擎：ensureLocalEngine 单例、LocalStreamSession、transcribePcmLocal、状态订阅 hook
-src/lib/asr/offline.ts             # 本地离线高精度引擎（SenseVoice 非流式）：ensureOfflineEngine、transcribePcmOffline、FS 注入模型
+src/lib/asr/local.ts               # 本地流式引擎：ensureLocalEngine 单例、LocalStreamSession（实时页）、transcribePcmLocal（经 fileWorker 在 Worker 中执行）、状态订阅 hook
+src/lib/asr/offline.ts             # 本地离线高精度引擎（SenseVoice 非流式）：ensureOfflineEngine、transcribePcmOffline（经 fileWorker 在 Worker 中执行）、FS 注入模型
+src/lib/asr/fileWorker.ts          # 文件转写 Worker 桥接：transcribeInWorker 串行队列、transferable PCM 下发、进度/阶段回调透传
 src/lib/asr/online.ts              # 在线客户端：PROVIDERS 预设、transcribeBlob（含百炼 6 形态协议探测链）、transcribeFile（60s 分段）、testOnline
 src/lib/ai/templates.ts            # AI 总结预设模板（25 套，脚本生成——勿手改，见 scripts/extract-templates.mjs）
 src/lib/ai/llm.ts                  # OpenAI 兼容 chat/completions 客户端（非流式 + SSE 流式解析）
@@ -110,10 +114,19 @@ vite.config.ts                     # dev 服务器 CORS 流式透传代理（/pr
 - **总结编排**（summarize.ts）：全文 >12k 字启用 map-reduce——按段落分块（~8000 字/块）并发 2 提取要点 → 要点合集进入最终阶段；模板提示词（含 G-SPEC）只作用于最终阶段；map 上限 120 块（约 100 万字符），超出截断并在结果中注明。最终阶段流式（SSE 逐 delta），AiPage 以 ~150ms 节流渲染。
 - **附件提取**（extract.ts）：txt/md/csv/json 代码类直读；pdf 走 pdfjs-dist（worker 以 `?url` 静态导入）；docx/pptx 用 JSZip 解包 XML 正则提取（**故意不用 mammoth**——其主入口依赖 node fs）；xlsx 用 SheetJS；音频复用 ASR 链路（在线 transcribeFile / 本地优先 SenseVoice 回落 Zipformer）。`.doc`（旧版）不支持，UI 提示另存为 .docx。
 - **富渲染管线**（richRender.ts，预览/导出共用）：G-SPEC 契约会让模型输出 SVG 封面块与 mermaid 图（思维导图/流程图/甘特图），marked 只产出源码块——`renderRichMarkdown` 将 ```mermaid / ```svg 代码块升级为真实图形；代码块**内容特征优先**识别（以 `<svg` 开头→svg、以图类型关键字开头→mermaid，与围栏语言无关——模型常用 xml/html 围栏标注 SVG）。**模型手写 SVG 经 fitSvgText 修复**：canvas 逐行测量文本宽度，坐标计入祖先 `translate` 变换（模型常把内容包在 `<g transform="translate">` 里，漏算会整体错位漏判），可用宽度取「所在最小容器框」（rect 几何 / path 画圆角框用 getBBox 量，过滤下划线等非容器形状）与 viewBox 右缘的较小者；轻微超宽（≥0.75 倍）缩字号，**内容较多（<0.75 倍）按容器宽度自动换行成多行——框体不够高时增高 rect 并把下方内容整体下移让位**（用户实测长结论在框内被截断，换行才放得下）；带样式的 tspan 混排退回 textLength 压缩；缺 viewBox 时由 width/height 补齐；内容超高时 getBBox 扩展 viewBox。**mermaid 配置两处关键点**：顶层 `fontFamily` 与 `themeVariables.fontFamily` 必须一致（测量与渲染同字体，否则 CJK 混排测量偏窄→foreignObject 文字被节点框裁断）；gantt `useWidth: 1100` 把甘特图时间轴压缩到固定宽度（超宽甘特缩放后文字不可读）。**宽图处理**：renderRichMarkdown 末尾把固有宽度 >1100px 的图形标记 `.md-fig-wide`（显式像素 width + max-width:none）——预览/HTML 导出由 .md-figure overflow-x:auto 原尺寸横向滚动，打印 @media print 退回等比缩放（纸张不能滚动，完整优先），不缩放的等价物是光栅化分辨率跟随固有尺寸（svgTextToPng 的 normalizeSvgSize + canvas ≤3200px）。时间轴有两条升级路径：① 表格（表头时间列/mm:ss 特征，detectTimeline）；② **列表**（模型按 G-SPEC 输出的「彩点 emoji+日期」markdown 列表，parseTimelineListItems，≥60% 命中彩点/日期才升级防误伤）——两者都转为 timeline.ts 的规范时间轴卡片（竖线连线+阶段彩点+日期胶囊，emoji 直接映射语义色 蓝=推进/棕=停滞/红=升级）。mermaid 输出**不能用 DOMPurify 清洗**（会剥离 foreignObject 内 HTML，文字全丢），改用针对性净化（移除 script/事件属性/javascript: 链接）。flowchart 默认渲染器为 **ELK**（`@mermaid-js/layout-elk` 注册 + `defaultRenderer: 'elk'`，运行时支持但类型已移除需断言；注册失败回落 dagre）——正交边路由显著减少复杂图的斜线长边；CJK 长标签适配（wrappingWidth 280 + 显式 CJK fontFamily 修正文本测量）避免菱形文字溢出被裁。流式期间 MarkdownView 走轻量同步路径（图形保持源码），生成完成后自动升级。
-- **导出**（exporters.ts）：**md 导出时图形一律栅格化为 PNG data URI 内嵌**（svg/mermaid 围栏 + 裸 `<svg>` HTML 块，时间轴列表内联时间轴卡片 HTML；转换失败回落内联 SVG/保留源码）——用户实测 Typora 等查看器剥离内联 SVG 的 `<style>`（rect 默认 fill=黑，全部黑块）且不渲染 foreignObject 文字，PNG 在所有主流查看器显示一致；html/doc 共用 marked+内联 CSS 模板；**pdf 走浏览器打印引擎**（window.open 打印窗口自动唤起打印，对话框内选「另存为 PDF」——html2canvas/html-to-image 两条 canvas 光栅化路线在本应用均不可靠：html2canvas 解析 Tailwind v4 的 oklch 颜色抛错且不渲染 foreignObject，离屏/负 z-index 定位又产出空白画布，详见 exporters.ts 注释）；doc 为 Word 兼容 HTML（Word/WPS 可开，内联 SVG 已转 PNG）；xlsx 用 SheetJS（概要表+每表格一工作表）；pptx 用 pptxgenjs（h1/h2 分页，svg/mermaid 转 PNG 插图，模型 SVG 先过 fitSvgText）。重依赖全部动态 import，均不进首屏 chunk。
+- **导出**（exporters.ts）：**md 导出时图形一律栅格化为 PNG data URI 内嵌**（svg/mermaid 围栏 + 裸 `<svg>` HTML 块，时间轴列表内联时间轴卡片 HTML；转换失败回落内联 SVG/保留源码）——用户实测 Typora 等查看器剥离内联 SVG 的 `<style>`（rect 默认 fill=黑，全部黑块）且不渲染 foreignObject 文字，PNG 在所有主流查看器显示一致；html/doc 共用 marked+内联 CSS 模板；**pdf 走浏览器打印引擎**（window.open 打印窗口自动唤起打印，对话框内选「另存为 PDF」——html2canvas/html-to-image 两条 canvas 光栅化路线在本应用均不可靠：html2canvas 解析 Tailwind v4 的 oklch 颜色抛错且不渲染 foreignObject，离屏/负 z-index 定位又产出空白画布，详见 exporters.ts 注释）；doc 为 Word 兼容 HTML（Word/WPS 可开，内联 SVG 已转 PNG）；xlsx 用 SheetJS（概要表+每表格一工作表）；pptx 用 pptxgenjs（h1/h2 分页，svg/mermaid 转 PNG 插图，模型 SVG 先过 fitSvgText）。重依赖全部动态 import，均不进首屏 chunk。2026-11-24：html/doc 屏显正文宽度与应用主容器同步（App.tsx 改 max-w-7xl = 1280px），pdf 打印经 PRINT_CSS（@media print）收回 A4 可打印宽度 760px——否则 1280px 正文被打印整体缩放导致文字变小。
 - **微信格式**（wechat.ts）：微信聊天框不保留富文本，逐行转换 markdown → 纯文本（标题→emoji+【】、列表→•、表格→「列:值 ｜ 列:值」）。
 - **LLM 配置**：`settings.ai`（独立于 ASR 的 baseURL/apiKey/model），设置页「AI 总结服务」区块含测试连接。
 - **dev 代理流式化**：vite corsProxyPlugin 已从 `upstream.arrayBuffer()` 整体缓冲改为逐块 pipe（SSE 必须）；`proxy.mjs`（独立部署用）当前仍为整体缓冲——需要流式输出时须同步改造。
+
+2026-11-24 更新：**输出语言**——AiPage「输出语言」下拉（`OUTPUT_LANGUAGES`：跟随原文 + 16 种常用语言，默认跟随原文）→ `SummarizeOptions.language` → `buildSystemPrompt` 末尾追加 langNote。三个关键点：① 语言指令放在 system 提示词**最末**（模板与 G-SPEC 之后），位置越靠后优先级越高；② 仅一句泛泛的「格式不得省略」约束不住语言切换时的契约衰减——langNote 把 G-SPEC 结构要求逐条重述成 ①-⑦ 对照清单（结论式标题+TL;DR / 模块化正文+固定三行小结 / 全局待办表五列 / 自动配图规则 / 时间轴 / SVG 封面块 / 保真规则），让模型逐项对照输出；③ 指定语言时正文占位标记（【待确认】）与模板中文固定措辞（【重点】【结论】【待办】等）改为输出语言等义标记（如英文 [TBC]），原文直接引用与专有名词保留原语言。
+
+### 4.7 文件转写 Worker 化（2026-11-24 新增）
+本地文件转写原本在主线程执行：离线 SenseVoice 每 30s 块解码阻塞主线程 1-3s、流式 Zipformer 每秒喂入阻塞百余毫秒，主线程无法抢占，转写期间鼠标/滚动/切页均卡顿。现整体移入**经典 Worker**（放 public/ 与 sherpa 运行时同源直载，不经 Vite 打包；不使用 module worker 以规避打包路径问题）。
+- **Worker 内部**（public/asr-file-worker.js）：`self.window = self` shim 后 importScripts 加载对应 wrapper + glue（offline → vad-asr MODULARIZE 构建 + SherpaOnnxOfflineNS；local → echoyzd 流式构建读全局 Module + SherpaOnnxASR），配对约束同 §4.2。模型从 **Cache API 读取**（cache 名 `vt-model-cache`，与 src/lib/models/downloader.ts 一致）——模型下载/缓存写入仍由主线程引擎模块负责（local 引擎未缓存时 `transcribePcmLocal` 内部先走 `ensureLocalEngine` 主线程下载，offline 由调用方以 `offlineModelCached()` 预检），Worker 只读缓存；offline 把模型 `FS.writeFile` 进 MEMFS（每 Worker 实例一份，模块与已写入模型复用，识别器随每次转写创建/释放，与主线程原实现一致）。识别循环与结果规整（stripSenseTags/joinParts/fixLocalCase）为对应主线程模块（offline.ts/online.ts/case.ts）的**纯函数复刻——改动须两处同步**（Worker 免打包无法 import TS 模块）。
+- **桥接**（src/lib/asr/fileWorker.ts）：`transcribeInWorker(engine, pcm, language, opts)`，单一在途任务协议（入 `{type:'transcribe'}`，出 stage/progress/result/error）；主线程 chain Promise 串行排队（多附件同时提取逐个转写，Worker 内亦有 chain 兜底）；`pcm.buffer` 以 transferable 下发零拷贝——**调用后原 buffer 不可再用**。runtimeBase 与 modelUrls（catalog 的 dataUrls）随消息下发，Worker 不 import 主线程代码。
+- **签名变更**：`transcribePcmLocal(pcm, opts)` 不再接收 module 参数；`transcribePcmOffline` 增加 `onStage`（Worker 阶段文案：引擎运行时加载/模型写入/识别器初始化）。FilePage 与 ai/extract.ts 相应删去手工编排（ensureLocalEngine/ensureOfflineEngine 仅保留给设置页与状态订阅）。
+- **已知取舍**：① Worker 任务不可取消（协议无 cancel 类型），「取消」按钮仅对在线转写生效——本地转写进行中点取消只是 UI 提示已取消，任务继续至完成（旧主线程实现同样不可中断，非回归）；② 文件转写 Worker 与实时页主线程引擎各自实例化 WASM，模型各持一份副本，长音频内存峰值与此前相当。
 
 ## 5. 验证状态（截至 v0.1.x）
 
@@ -132,19 +145,24 @@ vite.config.ts                     # dev 服务器 CORS 流式透传代理（/pr
 - **切页状态保留实测**：AI 页文本与模板选中状态跨页保留
 - 百炼 qwen3-asr-flash 探测链为预设默认路径；qwen-audio-3.0-asr-flash 专用协议（parameters.format + X-DashScope-SSE 头）已按官方 HTTP API 文档适配，噪声拒识（HAVE_NO_WORDS）按成功处理
 
+**已验证（2026-11-24 增补）**
+- `tsc --noEmit` 严格模式 + `vite build` 通过（所有功能提交后均复验）
+
 **待人工验收**
 - 真实麦克风下的本地流式识别准确率与延迟
 - 真实 API Key 的完整转写流程（含长音频分段）
 - Safari / Firefox 兼容性（目前以 Chrome/Edge 为准）
 - 百炼 qwen-chat 探测链的成功路径（`qwen3-asr-flash` + 真实 Key 完整转写）尚未实测；错误聚合路径已在 fun-asr-realtime 误配场景实测（2026-11-21）
 - 离线引擎长音频（>5 分钟）分段转写的耗时与内存表现；低端设备上 228MB 模型注入的内存峰值
+- 文件转写 Worker 化（§4.7）后的浏览器端实测：真实音频的离线/流式转写、Worker 读模型缓存、onStage/onProgress 回调、多附件串行排队、AI 附件音频提取路径（extract.ts 同步改造）
+- AI 总结输出语言（§4.6）成稿质量：非中文输出下 G-SPEC 契约是否完整保持（固定措辞等义替换、自动配图、时间轴、封面块）
 
 ## 6. 已知限制与坑
 
 1. **安全上下文限制**：非 `https://`/`localhost` 页面，浏览器禁用麦克风与 Cache API（实时转录不可用；模型缓存会失效）。内网 HTTP 部署的对策见 README「部署与分发」。
 2. **每设备数据隔离**：模型缓存（190MB）、API Key、历史记录都在各自浏览器里，换机器需重新下载/填写。
 3. **Groq/OpenAI 可能被 CORS 拦**：浏览器直连被拦时提示用户跑 `npm run proxy` 或换硅基流动。
-4. **本地 SenseVoice 延后**：官方无浏览器构建，需自建 wasm/web 运行时（emsdk 编译）。文件高精度场景目前走在线免费 SenseVoiceSmall。
+4. **本地文件转写不可取消**：转写在 Worker 中执行且协议无 cancel 类型，「取消」按钮仅对在线转写生效；本地转写进行中点取消只是 UI 提示，任务继续至完成（见 §4.7）。
 5. **模型加载瞬时内存高**：blob + XHR 缓冲 + WASM 堆约 3 份副本（~600MB 峰值），低端设备注意。
 6. **在线实时分段边界**可能切断词语（4s 固定窗口，无重叠）。
 7. **本地模型英文输出为全大写**：streaming zipformer 的英文 BPE 词表本身全大写。已在 `src/lib/asr/case.ts` 做输出规整（检测到 >80% 单词全大写时转句子式大小写；正常文本/中文不受影响）。规整无法恢复标点与撇号（"IVE"→"ive" 而非 "I've"），需要标点的英文场景建议用在线引擎。
@@ -158,16 +176,18 @@ vite.config.ts                     # dev 服务器 CORS 流式透传代理（/pr
 | 更换本地模型 | 改 `src/lib/models/catalog.ts`；**必须确认 `.data` 内文件名与识别器配置一致**（新模型需核对 Space 构建 的 assets 命名） |
 | 升级离线引擎（SenseVoice）wasm | 按 §4.4 重新自建：emsdk + sherpa-onnx master → vad-asr CMake 定制 → vendor 脚本拷入 `public/sherpa/offline/`，wrapper 与 wasm 必须同源配对 |
 | 热词字段 | `AppSettings.hotwords`（localStorage `vt:settings`）；Qwen-ASR 走 system message，transcriptions 走 prompt 字段（`src/lib/asr/online.ts`） |
+| 修改文件转写 Worker 逻辑 | `public/asr-file-worker.js`（经典 Worker 免打包）+ 桥接 `src/lib/asr/fileWorker.ts`；stripSenseTags/joinParts/fixLocalCase 为纯函数复刻，与 offline.ts/online.ts/case.ts 的改动**须两处同步** |
+| 调整 AI 总结输出语言列表 | `src/lib/ai/summarize.ts` 的 `OUTPUT_LANGUAGES`（AiPage 下拉自动渲染）；语言指令与 G-SPEC 对照清单在 buildSystemPrompt 的 langNote |
 | 升级 sherpa 运行时 | 从同一构建源重新下载 glue/wasm/wrapper 三件套整体替换；epilogue 追加段保留 |
 | 发布 | `npm run build` → `dist/` 静态托管（必须 HTTPS 或 localhost；GitHub Pages 子路径需在 `vite.config.ts` 加 `base`） |
 | 出桌面安装包 | Roadmap 项：加 Electron + electron-builder（Win 包本机可出，Mac 包需 Mac 构建），模型可打进安装包实现真离线 |
 
 ## 8. Roadmap
 
-- [ ] 本地高精度文件模型（SenseVoice，需 emsdk 自建 wasm/web 运行时）
+- [x] 本地高精度文件模型（SenseVoice，需 emsdk 自建 wasm/web 运行时）——2026-11-22 上线，2026-11-24 起解码移入后台 Worker
 - [ ] SRT 字幕导出
 - [ ] 说话人分离（VAD + diarization）
-- [ ] 热词增强
+- [ ] 本地引擎热词增强（在线引擎已支持热词/上下文）
 - [ ] Electron 桌面打包（双击运行，麦克风免配置，模型可选内置）
 
 ## 9. 联系与归属
